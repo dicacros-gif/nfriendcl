@@ -317,7 +317,7 @@ class MainActivity : AppCompatActivity() {
     private fun handleUrls(json: String) {
         if (!running) return
         val arr = parseArray(json)
-        if (arr.isEmpty()) { finishRun("이웃새글을 찾지 못했어요 — 로그인/이웃 여부를 확인하세요"); return }
+        if (arr.length() == 0) { finishRun("이웃새글을 찾지 못했어요 — 로그인/이웃 여부를 확인하세요"); return }
         for (i in 0 until arr.length()) {
             val u = arr.optString(i)
             if (u.isNotBlank() && queue.size < target) queue.addLast(u)
@@ -409,7 +409,7 @@ class MainActivity : AppCompatActivity() {
     private fun handleBloggers(json: String) {
         if (!running) return
         val arr = parseArray(json)
-        if (arr.isEmpty()) { finishRun("검색결과에서 블로거를 찾지 못했어요"); return }
+        if (arr.length() == 0) { finishRun("검색결과에서 블로거를 찾지 못했어요"); return }
         for (i in 0 until arr.length()) {
             val id = arr.optString(i)
             if (id.isNotBlank()) queue.addLast(id)
