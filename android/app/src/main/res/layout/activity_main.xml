@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0d0d0d">
+
+    <!-- 상단 바: 제목 + 기본 계정 전환 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp"
+        android:background="#161616">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="N FriendCl"
+            android:textColor="#03c75a"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/accountGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:singleSelection="true"
+            app:selectionRequired="false">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAcc1"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="dicajohn"
+                android:textSize="11sp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAcc2"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="macdcross"
+                android:textSize="11sp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:indeterminate="true"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="6dp"
+        android:textColor="#03c75a"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- 자동화 중 컨트롤 바(정지 / 현재화면 수락) -->
+    <LinearLayout
+        android:id="@+id/stopBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#121212"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="3dp"
+        android:paddingBottom="3dp"
+        android:visibility="gone">
+
+        <Button android:id="@+id/btnStop"
+            android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:minWidth="0dp"
+            android:text="■ 정지 / 홈" android:textSize="12sp"
+            android:textStyle="bold"
+            android:backgroundTint="#c0392b" android:textColor="#ffffff" />
+
+        <Button android:id="@+id/btnAcceptHere"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:layout_marginStart="6dp" android:minWidth="0dp"
+            android:text="✅ 현재화면 수락" android:textSize="12sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 디버그 로그 -->
+    <TextView
+        android:id="@+id/debugLog"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:background="#0a0a0a"
+        android:fontFamily="monospace"
+        android:textColor="#5fae5f"
+        android:textSize="9sp"
+        android:maxLines="6"
+        android:scrollbars="vertical"
+        android:visibility="gone" />
+
+    <!-- 본문: 컨트롤 폼 / 자동화용 WebView 가 번갈아 표시 -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ScrollView
+            android:id="@+id/form"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <!-- 계정 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="계정 (위 토글 선택 또는 아이디 직접 입력)"
+                    android:textColor="#9a9a9a"
+                    android:textSize="12sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="4dp">
+
+                    <EditText
+                        android:id="@+id/customId"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="아이디 직접 입력 (예: macdcross)"
+                        android:textColor="#f0f0f0"
+                        android:textColorHint="#5a5a5a"
+                        android:textSize="14sp"
+                        android:background="#1c1c1c"
+                        android:padding="10dp"
+                        android:inputType="text"
+                        android:maxLines="1" />
+
+                    <Button
+                        android:id="@+id/btnUseCustom"
+                        style="?attr/materialButtonOutlinedStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:minWidth="0dp"
+                        android:text="이 아이디로"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/currentAccountText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="현재 계정: dicajohn"
+                    android:textColor="#03c75a"
+                    android:textSize="12sp" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="14dp"
+                    android:background="#2a2a2a" />
+
+                <!-- 댓글 설정 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="❤️ 이웃새글 소셜활동 (하트 + 댓글)"
+                    android:textColor="#03c75a"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="댓글 기본 문구 (매번 조금씩 자동 변형)"
+                    android:textColor="#9a9a9a"
+                    android:textSize="12sp" />
+
+                <EditText
+                    android:id="@+id/commentBase"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#f0f0f0"
+                    android:textColorHint="#5a5a5a"
+                    android:textSize="14sp"
+                    android:background="#1c1c1c"
+                    android:padding="10dp"
+                    android:layout_marginTop="4dp"
+                    android:gravity="top"
+                    android:minLines="2"
+                    android:maxLines="4"
+                    android:inputType="textMultiLine" />
+
+                <TextView
+                    android:id="@+id/commentSamples"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:background="#14140b"
+                    android:padding="8dp"
+                    android:textColor="#ffe27a"
+                    android:textSize="11sp"
+                    android:lineSpacingMultiplier="1.2"
+                    android:text="변형 예시" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/swLike"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="❤️ 공감(하트) 남기기"
+                    android:textColor="#cfcfcf"
+                    android:textSize="13sp"
+                    android:checked="true" />
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/swComment"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="💬 댓글 남기기"
+                    android:textColor="#cfcfcf"
+                    android:textSize="13sp"
+                    android:checked="true" />
+
+                <!-- 처리 설정 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="처리 개수"
+                            android:textColor="#9a9a9a"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/countInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="20"
+                            android:textColor="#f0f0f0"
+                            android:textSize="14sp"
+                            android:background="#1c1c1c"
+                            android:padding="10dp"
+                            android:layout_marginTop="2dp"
+                            android:inputType="number"
+                            android:maxLines="1" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="8dp"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="동작 간격(초)"
+                            android:textColor="#9a9a9a"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/delayInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="5"
+                            android:textColor="#f0f0f0"
+                            android:textSize="14sp"
+                            android:background="#1c1c1c"
+                            android:padding="10dp"
+                            android:layout_marginTop="2dp"
+                            android:inputType="number"
+                            android:maxLines="1" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/btnSocial"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="❤️ 이웃새글 소셜활동 시작"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#03c75a"
+                    android:textColor="#ffffff" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="18dp"
+                    android:background="#2a2a2a" />
+
+                <!-- 서로이웃 수락 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="🤝 서로이웃 신청 수락"
+                    android:textColor="#03c75a"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="받은 서로이웃 신청을 화면에서 찾아 모두 수락합니다. 목록이 안 보이면 웹뷰에서 '서로이웃 신청' 페이지로 이동 후 '현재화면 수락'을 누르세요."
+                    android:textColor="#7a7a7a"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/btnAccept"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="🤝 서로이웃 신청 전체 수락"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#2e86de"
+                    android:textColor="#ffffff" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="18dp"
+                    android:background="#2a2a2a" />
+
+                <!-- 주제로 새 이웃 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="🔎 주제로 새 이웃 찾기"
+                    android:textColor="#03c75a"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="서로이웃 신청 메시지 (조금씩 자동 변형)"
+                    android:textColor="#9a9a9a"
+                    android:textSize="12sp" />
+
+                <EditText
+                    android:id="@+id/neighborMsg"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#f0f0f0"
+                    android:textColorHint="#5a5a5a"
+                    android:textSize="14sp"
+                    android:background="#1c1c1c"
+                    android:padding="10dp"
+                    android:layout_marginTop="4dp"
+                    android:gravity="top"
+                    android:minLines="2"
+                    android:maxLines="3"
+                    android:inputType="textMultiLine" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="주제 키워드"
+                    android:textColor="#9a9a9a"
+                    android:textSize="12sp" />
+
+                <EditText
+                    android:id="@+id/topicInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="예: 맛집, 여행, 재테크, 육아"
+                    android:textColor="#f0f0f0"
+                    android:textColorHint="#5a5a5a"
+                    android:textSize="14sp"
+                    android:background="#1c1c1c"
+                    android:padding="10dp"
+                    android:layout_marginTop="4dp"
+                    android:inputType="text"
+                    android:maxLines="1" />
+
+                <Button
+                    android:id="@+id/btnGrow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="🔎 주제로 새 이웃 찾아 신청"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#8e44ad"
+                    android:textColor="#ffffff" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="40dp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- 자동화용 WebView (자동화 중에만 보임) -->
+        <WebView
+            android:id="@+id/web"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+    </FrameLayout>
+</LinearLayout>
