@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stopBar: View
     private lateinit var btnStop: Button
     private lateinit var btnAcceptHere: Button
+    private lateinit var btnLogin: Button
 
     private lateinit var accountGroup: MaterialButtonToggleGroup
     private lateinit var customId: EditText
@@ -56,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var delayInput: EditText
     private lateinit var neighborMsg: EditText
     private lateinit var topicInput: EditText
+    private lateinit var growCountInput: EditText
 
     private var currentAccount = Accounts.IDS[0]
 
@@ -100,6 +102,8 @@ class MainActivity : AppCompatActivity() {
         delayInput = findViewById(R.id.delayInput)
         neighborMsg = findViewById(R.id.neighborMsg)
         topicInput = findViewById(R.id.topicInput)
+        growCountInput = findViewById(R.id.growCountInput)
+        btnLogin = findViewById(R.id.btnLogin)
 
         commentBase.setText(Comments.DEFAULT_BASE)
         neighborMsg.setText(Comments.DEFAULT_NEIGHBOR_MSG)
@@ -117,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnAccept).setOnClickListener { startAccept() }
         findViewById<Button>(R.id.btnGrow).setOnClickListener { startGrow() }
         findViewById<Button>(R.id.btnUseCustom).setOnClickListener { useCustomId() }
+        btnLogin.setOnClickListener { openLogin() }
         btnStop.setOnClickListener { stopAll() }
         btnAcceptHere.setOnClickListener { acceptHere() }
 
@@ -198,7 +203,14 @@ class MainActivity : AppCompatActivity() {
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 if (url == null) return
-                if (Accounts.isLoggedIn()) Accounts.saveCurrentFor(this@MainActivity, currentAccount)
+                if (Accounts.isLoggedIn()) {
+                    Accounts.saveCurrentFor(this@MainActivity, currentAccount)
+                    if (!running) {
+                        updateAccountLabel(true)
+                        setStatus("$currentAccount 로그인 완료 — '■ 정지 / 홈'을 눌러 돌아가세요")
+                        progress.visibility = View.GONE
+                    }
+                }
                 if (!running) return
                 if (url.contains("nid.naver.com")) { onNeedLoginUi(); return }
                 if (pageActed) return
@@ -234,17 +246,17 @@ class MainActivity : AppCompatActivity() {
     // ---------------------------------------------------------------
     //  공통 실행 제어
     // ---------------------------------------------------------------
-    private fun readSettings() {
-        target = countInput.text?.toString()?.trim()?.toIntOrNull()?.coerceIn(1, 500) ?: 20
+    private fun readSettings(countView: EditText) {
+        target = countView.text?.toString()?.trim()?.toIntOrNull()?.coerceIn(1, 500) ?: 20
         val sec = delayInput.text?.toString()?.trim()?.toIntOrNull()?.coerceIn(2, 120) ?: 5
         delayMs = sec * 1000L
     }
 
-    private fun beginRun(m: Phase, firstUrl: String, firstPhase: Phase) {
+    private fun beginRun(m: Phase, firstUrl: String, firstPhase: Phase, countView: EditText = countInput) {
         if (!ensureLoggedInOrPrompt()) {
             // 로그인 안 됐어도 일단 페이지를 열어 로그인 유도(웹뷰 보임)
         }
-        readSettings()
+        readSettings(countView)
         mode = m
         running = true
         processed = 0
@@ -306,12 +318,26 @@ class MainActivity : AppCompatActivity() {
         dbg("로그인 대기")
     }
 
+    /** 첫 화면에서 바로 네이버 로그인 → 완료 시 현재 계정 세션 자동 저장('정지/홈'으로 복귀) */
+    private fun openLogin() {
+        running = false
+        mode = Phase.NONE
+        phase = Phase.NONE
+        queue.clear()
+        showRunning(true)
+        btnAcceptHere.visibility = View.GONE
+        progress.visibility = View.VISIBLE
+        setStatus("$currentAccount 로 로그인하세요 — 끝나면 '■ 정지 / 홈'을 누르면 저장됩니다")
+        dbg("로그인 화면 — $currentAccount")
+        web.loadUrl(Accounts.LOGIN_URL)
+    }
+
     // ---------------------------------------------------------------
     //  모드 1: 이웃새글 소셜 활동
     // ---------------------------------------------------------------
     private fun startSocial() {
         setStatus("$currentAccount · 이웃새글 피드 여는 중…")
-        beginRun(Phase.FEED_COLLECT, Accounts.FEED_URL, Phase.FEED_COLLECT)
+        beginRun(Phase.FEED_COLLECT, Accounts.FEED_URL, Phase.FEED_COLLECT, countInput)
     }
 
     private fun handleUrls(json: String) {
@@ -361,8 +387,8 @@ class MainActivity : AppCompatActivity() {
     //  모드 2: 서로이웃 신청 수락
     // ---------------------------------------------------------------
     private fun startAccept() {
-        setStatus("$currentAccount · 서로이웃 신청 목록 여는 중…")
-        beginRun(Phase.ACCEPT_RUN, Accounts.buddyListUrl(currentAccount), Phase.ACCEPT_RUN)
+        setStatus("$currentAccount · 블로그 관리(서로이웃 신청) 여는 중…")
+        beginRun(Phase.ACCEPT_RUN, Accounts.acceptUrl(currentAccount), Phase.ACCEPT_RUN)
     }
 
     /** 웹뷰에 보이는 현재 화면에서 수락 실행(자동 진입 URL에 신청목록이 없을 때 수동 대안) */
@@ -375,7 +401,7 @@ class MainActivity : AppCompatActivity() {
         val u = web.url
         if (u == null || u == "about:blank") {
             progress.visibility = View.VISIBLE
-            loadPage(Accounts.buddyListUrl(currentAccount), Phase.ACCEPT_RUN)
+            loadPage(Accounts.acceptUrl(currentAccount), Phase.ACCEPT_RUN)
         } else {
             setStatus("현재 화면에서 수락 실행…")
             runJs("window.__NF_acceptAll()")
@@ -403,7 +429,7 @@ class MainActivity : AppCompatActivity() {
         val topic = topicInput.text?.toString()?.trim()
         if (topic.isNullOrBlank()) { toast("주제 키워드를 입력하세요"); return }
         setStatus("'$topic' 블로그 검색 중…")
-        beginRun(Phase.SEARCH_COLLECT, Accounts.blogSearchUrl(topic), Phase.SEARCH_COLLECT)
+        beginRun(Phase.SEARCH_COLLECT, Accounts.blogSearchUrl(topic), Phase.SEARCH_COLLECT, growCountInput)
     }
 
     private fun handleBloggers(json: String) {

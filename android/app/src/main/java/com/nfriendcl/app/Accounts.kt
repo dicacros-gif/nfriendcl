@@ -15,16 +15,26 @@ import java.net.URLEncoder
  */
 object Accounts {
 
-    /** 토글 버튼에 노출되는 기본 계정. 그 외 아이디는 사용자가 직접 입력. */
-    val IDS = listOf("dicajohn", "macdcross")
+    /**
+     * 토글 버튼에 노출되는 기본 계정. IDS[0] 이 앱 시작 시 기본 선택(고정) 계정.
+     * 그 외 아이디는 사용자가 직접 입력.
+     */
+    val IDS = listOf("macdcross", "dicajohn")
 
     // --- 자동화에 쓰는 모바일 네이버 URL ---
     fun homeUrl(id: String) = "https://m.blog.naver.com/$id"
 
-    /** 이웃새글 피드(하트·댓글 소셜 활동의 진입점) */
-    const val FEED_URL = "https://m.blog.naver.com/News.naver"
+    /** 첫 화면에서 바로 네이버 로그인 → 완료 시 현재 계정 세션 자동 저장 */
+    const val LOGIN_URL =
+        "https://nid.naver.com/nidlogin.login?mode=form&url=https%3A%2F%2Fm.blog.naver.com%2FFeedList.naver"
 
-    /** 이웃 목록 / 서로이웃 신청 관리 진입점 */
+    /** 이웃새글 피드(하트·댓글 소셜 활동의 진입점) */
+    const val FEED_URL = "https://m.blog.naver.com/FeedList.naver"
+
+    /** 서로이웃 신청 수락 — 블로그 관리(admin) 화면에서 처리 */
+    fun acceptUrl(id: String) = "https://admin.blog.naver.com/$id"
+
+    /** 이웃 목록 / 서로이웃 신청 관리 진입점(예비) */
     fun buddyListUrl(id: String) = "https://m.blog.naver.com/BuddyList.naver?blogId=$id"
 
     /** 주제(키워드)로 모바일 블로그 검색 */

@@ -243,18 +243,33 @@ object AutomationJs {
     }
     return false;
   }
-  function chooseBothNeighbor(d){
-    var els = d.querySelectorAll('label,button,a,[role=button],span');
+  // 라벨/요소 텍스트가 정확히 name 인 (서로)이웃 선택지를 찾아 선택. 비활성(막힘)이면 null 반환.
+  function pickNeighborType(d, name){
+    var els = d.querySelectorAll('label,button,a,[role=button],span,li,dd,dt');
     for (var i=0;i<els.length;i++){
-      if (norm(txt(els[i]))==='서로이웃'){
-        var inp = els[i].querySelector ? els[i].querySelector('input') : null;
-        if (inp && inp.disabled) continue;
-        try{ els[i].click(); }catch(e){}
-        try{ if (inp){ inp.checked=true; fire(inp,'change'); } }catch(e){}
-        return '서로이웃';
+      if (norm(txt(els[i]))!==name) continue;
+      var inp = els[i].querySelector ? els[i].querySelector('input') : null;
+      if (!inp && els[i].getAttribute){
+        var f = els[i].getAttribute('for');
+        if (f){ try{ inp = d.getElementById(f); }catch(e){} }
       }
+      if (inp && inp.disabled) continue;
+      if (els[i].getAttribute && els[i].getAttribute('aria-disabled')==='true') continue;
+      try{ els[i].click(); }catch(e){}
+      try{ if (inp && !inp.disabled){ inp.checked=true; fire(inp,'click'); fire(inp,'change'); } }catch(e){}
+      return name;
     }
-    return 'default';
+    return null;
+  }
+  // 1순위 서로이웃 → 막혀 있으면 2순위 이웃
+  function chooseNeighborType(d){
+    return pickNeighborType(d,'서로이웃') || pickNeighborType(d,'이웃') || 'default';
+  }
+  // (서로)이웃 신청 레이어의 최종 확인/신청 버튼을 적극적으로 클릭
+  function clickConfirm(d){
+    var byCls = d.querySelector('.btn_ok, ._confirm, button.confirm, a.confirm, .button_confirm, ._popupConfirm');
+    if (byCls){ try{ byCls.click(); return true; }catch(e){} }
+    return clickByText(d, ['확인','신청','신청하기','서로이웃신청','이웃신청','이웃추가','추가','완료','예']);
   }
   function fillMessage(d, msg){
     if (!msg) return;
@@ -272,21 +287,26 @@ object AutomationJs {
     if (!addBtn){ report('noaddbtn'); return; }
     try{ addBtn.click(); }catch(e){}
     setTimeout(function(){
-      chooseBothNeighbor(edoc());
+      var ntype = chooseNeighborType(edoc());   // 1순위 서로이웃 → 막히면 이웃
+      log('이웃유형: '+ntype);
       setTimeout(function(){
         fillMessage(edoc(), msg);
         setTimeout(function(){
           clickByText(edoc(), ['다음']);
           setTimeout(function(){
-            var ok = clickByText(edoc(), ['확인','신청','서로이웃신청','이웃신청','이웃추가','추가']);
+            var ok = clickConfirm(edoc());        // 확인/신청 자동 클릭
             setTimeout(function(){
-              if (looksLikeLogin()){ report('needlogin'); return; }
-              report(ok ? 'added' : 'fail');
-            }, 800);
-          }, 700);
-        }, 500);
-      }, 600);
-    }, 900);
+              if (!ok) ok = clickConfirm(edoc());  // 레이어가 늦게 뜨면 재시도
+              clickByText(edoc(), ['확인','예']);    // 뒤따르는 확인 팝업까지 통과
+              setTimeout(function(){
+                if (looksLikeLogin()){ report('needlogin'); return; }
+                report(ok ? 'added' : 'fail');
+              }, 800);
+            }, 1000);
+          }, 800);
+        }, 600);
+      }, 700);
+    }, 1000);
   };
 
   window.__NF_loginCheck = function(){
