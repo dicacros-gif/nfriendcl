@@ -171,30 +171,60 @@ object AutomationJs {
     function finish(){ log('행동 '+JSON.stringify(result)); try{ NF.onActed(JSON.stringify(result)); }catch(e){} }
   };
 
-  // ---------- 3) 서로이웃 신청 전체 수락 ----------
+  // ---------- 3) 서로이웃 신청 전체 수락 (Batch) ----------
   window.__NF_acceptAll = function(){
-    var count=0, max=200;
-    function findAccept(){
-      var els = edoc().querySelectorAll('a,button,[role=button]');
-      for (var i=0;i<els.length;i++){
-        var t = norm(txt(els[i]));
-        if (t==='수락' || t==='서로이웃수락' || t==='신청수락' || t==='수락하기') return els[i];
-      }
-      return null;
+    function getAdminDoc(){
+      try {
+        var f = document.getElementById('mainFrame');
+        if (f && f.contentDocument) return f.contentDocument;
+      } catch(e){}
+      return document;
     }
-    function step(){
-      if (count>=max){ done('max'); return; }
-      var b = findAccept();
-      if (!b){ done(count>0?'done':'none'); return; }
-      try{ b.click(); }catch(e){}
-      count++;
+    
+    // 1) 왼쪽 메뉴 '서로이웃 신청' 클릭 (PC 관리 화면일 때만)
+    // 왼쪽 메뉴는 보통 iframe 밖에 있음
+    var menu = document.getElementById('menu_buddy_request') || 
+               document.querySelector('a[href*="BuddyRequestReceipt"]');
+               
+    if (menu && location.href.indexOf('BuddyRequestReceipt') < 0) {
+      log('서로이웃 신청 메뉴 이동');
+      menu.click();
+      return; 
+    }
+
+    var adoc = getAdminDoc();
+
+    // 2) 전체 선택 체크박스 클릭
+    var allCheck = adoc.getElementById('all_check') || adoc.querySelector('input[name="all_check"]');
+    if (allCheck) {
+      log('전체 선택 체크박스 클릭');
+      if (!allCheck.checked) { allCheck.click(); }
+      
+      // 3) 바로 위 수락 버튼 클릭
       setTimeout(function(){
-        clickByText(edoc(), ['확인','예','수락']);
-        setTimeout(step, 1200);
-      }, 700);
+        var acceptBtn = adoc.querySelector('a.btn_ok, #content a.btn_type1') || 
+                        Array.from(adoc.querySelectorAll('a, button')).find(function(el){
+                          return norm(txt(el)) === '수락';
+                        });
+        if (acceptBtn) {
+          log('수락 버튼 클릭');
+          acceptBtn.click();
+          setTimeout(function(){
+            // 확인 팝업 처리
+            clickByText(adoc, ['확인','예','수락']);
+            setTimeout(function(){
+              try{ NF.onAccept(JSON.stringify({count:1, done:true, msg:'done'})); }catch(e){}
+            }, 1000);
+          }, 1000);
+        } else {
+          log('수락 버튼을 찾을 수 없음');
+          try{ NF.onAccept(JSON.stringify({count:0, done:true, msg:'none'})); }catch(e){}
+        }
+      }, 1000);
+    } else {
+      log('체크박스를 찾을 수 없음 (서로이웃 신청 목록이 아닐 수 있음)');
+      try{ NF.onAccept(JSON.stringify({count:0, done:true, msg:'none'})); }catch(e){}
     }
-    function done(why){ log('수락 '+count+'건 ('+why+')'); try{ NF.onAccept(JSON.stringify({count:count, done:true, msg:why})); }catch(e){} }
-    step();
   };
 
   // ---------- 4) 검색결과에서 블로거 아이디 수집 ----------
@@ -243,70 +273,130 @@ object AutomationJs {
     }
     return false;
   }
-  // 라벨/요소 텍스트가 정확히 name 인 (서로)이웃 선택지를 찾아 선택. 비활성(막힘)이면 null 반환.
-  function pickNeighborType(d, name){
-    var els = d.querySelectorAll('label,button,a,[role=button],span,li,dd,dt');
-    for (var i=0;i<els.length;i++){
-      if (norm(txt(els[i]))!==name) continue;
-      var inp = els[i].querySelector ? els[i].querySelector('input') : null;
-      if (!inp && els[i].getAttribute){
-        var f = els[i].getAttribute('for');
-        if (f){ try{ inp = d.getElementById(f); }catch(e){} }
-      }
-      if (inp && inp.disabled) continue;
-      if (els[i].getAttribute && els[i].getAttribute('aria-disabled')==='true') continue;
-      try{ els[i].click(); }catch(e){}
-      try{ if (inp && !inp.disabled){ inp.checked=true; fire(inp,'click'); fire(inp,'change'); } }catch(e){}
-      return name;
-    }
-    return null;
-  }
-  // 1순위 서로이웃 → 막혀 있으면 2순위 이웃
+  
+  // 1순위 서로이웃 선택 절차 (더욱 공격적인 체크)
   function chooseNeighborType(d){
-    return pickNeighborType(d,'서로이웃') || pickNeighborType(d,'이웃') || 'default';
+    log('!! 서로이웃 원 체크 시도 !!');
+    
+    // 방법 1: "서로이웃을 신청합니다" 텍스트 기반 정밀 탐색 및 체크
+    var labels = d.querySelectorAll('label, span, li, dt, dd, div');
+    for (var i=0; i<labels.length; i++){
+      var t = norm(txt(labels[i]));
+      if (t.indexOf('서로이웃을신청합니다') >= 0 || t.indexOf('서로이웃신청') >= 0) {
+        log('서로이웃 텍스트 발견 -> 체크 시도');
+        // 해당 요소 직접 클릭
+        labels[i].click();
+        // 내부 또는 근처의 input(radio)을 찾아 강제로 체크
+        var inner = labels[i].querySelector('input[type="radio"]');
+        if (!inner && labels[i].parentElement) inner = labels[i].parentElement.querySelector('input[type="radio"]');
+        if (inner) {
+          log('라디오 버튼 강제 체크');
+          inner.click(); inner.checked = true; fire(inner, 'change'); fire(inner, 'click');
+        }
+        return 'SUCCESS_TEXT';
+      }
+    }
+
+    // 방법 2: 라디오 버튼 리스트에서 두 번째(서로이웃) 직접 강제 클릭
+    var rs = d.querySelectorAll('input[type="radio"]');
+    if (rs.length >= 2) {
+      log('라디오 리스트 확인 -> 2번째(서로이웃) 강제 선택');
+      rs[1].click(); rs[1].checked = true; fire(rs[1], 'change'); fire(rs[1], 'click');
+      return 'SUCCESS_INDEX';
+    }
+
+    // 방법 3: ID 기반 직접 선택
+    var both = d.getElementById('bothBuddyRadio') || d.querySelector('input[value="bothBuddy"]') || d.getElementById('each_buddy2');
+    if (both) {
+      log('ID/Value 기반 -> 서로이웃 선택');
+      both.click(); both.checked = true; fire(both, 'change');
+      return 'SUCCESS_ID';
+    }
+    return 'FAIL';
   }
-  // (서로)이웃 신청 레이어의 최종 확인/신청 버튼을 적극적으로 클릭
+
+  // 상단 우측 '확인' 버튼 클릭 절차
   function clickConfirm(d){
-    var byCls = d.querySelector('.btn_ok, ._confirm, button.confirm, a.confirm, .button_confirm, ._popupConfirm');
-    if (byCls){ try{ byCls.click(); return true; }catch(e){} }
-    return clickByText(d, ['확인','신청','신청하기','서로이웃신청','이웃신청','이웃추가','추가','완료','예']);
+    log('!! 상단 확인 버튼 탐색 !!');
+    
+    // 방법 1: 상단 헤더 영역 내의 "확인" 또는 "다음" 텍스트 버튼 (스크린샷 기준)
+    var headers = d.querySelectorAll('header, .header, .u_p_hd, .buddy_add_hd, .u_hd, .top_bar');
+    for (var i=0; i<headers.length; i++){
+      var btns = headers[i].querySelectorAll('a, button, span, [role="button"]');
+      for (var j=0; j<btns.length; j++){
+        var t = norm(txt(btns[j]));
+        if (t === '확인' || t === '다음') {
+          log('헤더 내 [' + t + '] 버튼 발견 -> 클릭');
+          btns[j].click(); return true;
+        }
+      }
+    }
+    
+    // 방법 2: 클래스 기반 (btn_ok, btn_next 등)
+    var okBtn = d.querySelector('.btn_ok, ._btn_ok, .btn_next, ._btnNext, ._confirm, .confirm');
+    if (okBtn) {
+      log('클래스 기반 버튼 발견 -> 클릭');
+      okBtn.click(); return true;
+    }
+
+    // 방법 3: 전체 영역 텍스트 매칭
+    return clickByText(d, ['확인','다음','신청','완료']);
   }
+
   function fillMessage(d, msg){
     if (!msg) return;
     var ta = d.querySelector('textarea[placeholder*="메시지"], textarea[placeholder*="멘트"], textarea[placeholder*="신청"], .buddy_message textarea, textarea[maxlength], textarea');
-    if (ta){ try{ ta.focus(); }catch(e){} ta.value = msg; fire(ta,'input'); fire(ta,'change'); }
+    if (ta){ 
+      log('메시지 입력창 발견 -> 텍스트 입력');
+      ta.focus(); ta.value = msg; fire(ta, 'input'); fire(ta, 'change');
+    }
   }
+
   window.__NF_addNeighbor = function(payload){
     if (typeof payload==='string'){ try{ payload=JSON.parse(payload); }catch(e){ payload={}; } }
     var msg = payload.message || '';
-    function report(s){ log('이웃신청 '+s); try{ NF.onAdd(JSON.stringify({status:s})); }catch(e){} }
+    function report(s){ log('결과: '+s); try{ NF.onAdd(JSON.stringify({status:s})); }catch(e){} }
+    
     var d = edoc();
     if (looksLikeLogin()){ try{ NF.onNeedLogin(); }catch(e){} report('needlogin'); return; }
-    if (isAlreadyNeighbor(d)){ report('already'); return; }
-    var addBtn = findAddBtn(d);
-    if (!addBtn){ report('noaddbtn'); return; }
-    try{ addBtn.click(); }catch(e){}
-    setTimeout(function(){
-      var ntype = chooseNeighborType(edoc());   // 1순위 서로이웃 → 막히면 이웃
-      log('이웃유형: '+ntype);
+    
+    // 현재 페이지 상태 판별
+    var isFormPage = (location.href.indexOf('BuddyAddForm') >= 0 || d.querySelector('#bothBuddyRadio') || d.querySelector('.buddy_add_hd'));
+    
+    if (!isFormPage) {
+      // [단계 1] 블로그 홈: 이웃추가 버튼 클릭
+      if (isAlreadyNeighbor(d)){ report('already'); return; }
+      var addBtn = findAddBtn(d);
+      if (!addBtn){ report('noaddbtn'); return; }
+      log('1단계: 이웃추가 버튼 클릭');
+      addBtn.click();
+    } else {
+      // [단계 2] 신청 폼 페이지: 서로이웃 선택 및 확인
+      log('2단계: 신청 폼 처리 시작');
       setTimeout(function(){
-        fillMessage(edoc(), msg);
+        // 1. 서로이웃 원 체크
+        var res = chooseNeighborType(edoc());
+        
         setTimeout(function(){
-          clickByText(edoc(), ['다음']);
+          // 2. 상단 우측 확인 클릭
+          log('3단계: 상단 확인 클릭 시도');
+          var ok1 = clickConfirm(edoc());
+          
           setTimeout(function(){
-            var ok = clickConfirm(edoc());        // 확인/신청 자동 클릭
+            // 3. 메시지 입력 및 최종 신청
+            fillMessage(edoc(), msg);
             setTimeout(function(){
-              if (!ok) ok = clickConfirm(edoc());  // 레이어가 늦게 뜨면 재시도
-              clickByText(edoc(), ['확인','예']);    // 뒤따르는 확인 팝업까지 통과
+              log('4단계: 최종 신청 클릭 시도');
+              var ok2 = clickConfirm(edoc());
               setTimeout(function(){
-                if (looksLikeLogin()){ report('needlogin'); return; }
-                report(ok ? 'added' : 'fail');
-              }, 800);
-            }, 1000);
-          }, 800);
-        }, 600);
-      }, 700);
-    }, 1000);
+                clickByText(edoc(), ['확인','예']);
+                setTimeout(function(){ report('added'); }, 1000);
+              }, 1000);
+            }, 1200);
+          }, 1200);
+        }, 1000);
+      }, 800);
+    }
   };
 
   window.__NF_loginCheck = function(){

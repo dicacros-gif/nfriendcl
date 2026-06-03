@@ -209,13 +209,30 @@
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:orientation="horizontal"
                     android:layout_marginTop="10dp"
-                    android:text="댓글 기본 문구 (매번 조금씩 자동 변형)"
-                    android:textColor="#9a9a9a"
-                    android:textSize="12sp" />
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="댓글 기본 문구 (매번 조금씩 자동 변형)"
+                        android:textColor="#9a9a9a"
+                        android:textSize="12sp" />
+                    <Button
+                        android:id="@+id/btnRefreshComment"
+                        style="?attr/materialButtonOutlinedStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="0dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="문구 확인"
+                        android:textSize="11sp" />
+                </LinearLayout>
 
                 <EditText
                     android:id="@+id/commentBase"
@@ -232,17 +249,7 @@
                     android:maxLines="4"
                     android:inputType="textMultiLine" />
 
-                <TextView
-                    android:id="@+id/commentSamples"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:background="#14140b"
-                    android:padding="8dp"
-                    android:textColor="#ffe27a"
-                    android:textSize="11sp"
-                    android:lineSpacingMultiplier="1.2"
-                    android:text="변형 예시" />
+                <!-- 변형 예시 텍스트뷰 삭제됨 -->
 
                 <androidx.appcompat.widget.SwitchCompat
                     android:id="@+id/swLike"
@@ -344,34 +351,7 @@
                     android:layout_marginTop="18dp"
                     android:background="#2a2a2a" />
 
-                <!-- 서로이웃 수락 -->
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
-                    android:text="🤝 서로이웃 신청 수락"
-                    android:textColor="#03c75a"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="3dp"
-                    android:text="받은 서로이웃 신청을 화면에서 찾아 모두 수락합니다. 목록이 안 보이면 웹뷰에서 '서로이웃 신청' 페이지로 이동 후 '현재화면 수락'을 누르세요."
-                    android:textColor="#7a7a7a"
-                    android:textSize="11sp" />
-
-                <Button
-                    android:id="@+id/btnAccept"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="🤝 서로이웃 신청 전체 수락"
-                    android:textSize="15sp"
-                    android:textStyle="bold"
-                    android:backgroundTint="#2e86de"
-                    android:textColor="#ffffff" />
+                <!-- 서로이웃 수락 섹션 삭제됨 -->
 
                 <View
                     android:layout_width="match_parent"
@@ -389,13 +369,30 @@
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:orientation="horizontal"
                     android:layout_marginTop="10dp"
-                    android:text="서로이웃 신청 메시지 (조금씩 자동 변형)"
-                    android:textColor="#9a9a9a"
-                    android:textSize="12sp" />
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="서로이웃 신청 메시지 (조금씩 자동 변형)"
+                        android:textColor="#9a9a9a"
+                        android:textSize="12sp" />
+                    <Button
+                        android:id="@+id/btnRefreshNeighborMsg"
+                        style="?attr/materialButtonOutlinedStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minWidth="0dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="문구 확인"
+                        android:textSize="11sp" />
+                </LinearLayout>
 
                 <EditText
                     android:id="@+id/neighborMsg"

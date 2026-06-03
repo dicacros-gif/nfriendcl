@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var customId: EditText
     private lateinit var currentAccountText: TextView
     private lateinit var commentBase: EditText
-    private lateinit var commentSamples: TextView
+    private var commentSamples: TextView? = null
     private lateinit var swLike: SwitchCompat
     private lateinit var swComment: SwitchCompat
     private lateinit var countInput: EditText
@@ -95,7 +95,6 @@ class MainActivity : AppCompatActivity() {
         customId = findViewById(R.id.customId)
         currentAccountText = findViewById(R.id.currentAccountText)
         commentBase = findViewById(R.id.commentBase)
-        commentSamples = findViewById(R.id.commentSamples)
         swLike = findViewById(R.id.swLike)
         swComment = findViewById(R.id.swComment)
         countInput = findViewById(R.id.countInput)
@@ -107,18 +106,20 @@ class MainActivity : AppCompatActivity() {
 
         commentBase.setText(Comments.DEFAULT_BASE)
         neighborMsg.setText(Comments.DEFAULT_NEIGHBOR_MSG)
-        refreshSamples()
-        commentBase.addTextChangedListener(object : android.text.TextWatcher {
-            override fun afterTextChanged(s: android.text.Editable?) = refreshSamples()
-            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-        })
+        
+        findViewById<Button>(R.id.btnRefreshComment).setOnClickListener {
+            val base = commentBase.text?.toString().orEmpty()
+            toast("변형 예시:\n" + Comments.comment(base, seq++))
+        }
+        findViewById<Button>(R.id.btnRefreshNeighborMsg).setOnClickListener {
+            val base = neighborMsg.text?.toString().orEmpty()
+            toast("변형 예시:\n" + Comments.neighborMessage(base, seq++))
+        }
 
         setupWeb()
         setupAccounts()
 
         findViewById<Button>(R.id.btnSocial).setOnClickListener { startSocial() }
-        findViewById<Button>(R.id.btnAccept).setOnClickListener { startAccept() }
         findViewById<Button>(R.id.btnGrow).setOnClickListener { startGrow() }
         findViewById<Button>(R.id.btnUseCustom).setOnClickListener { useCustomId() }
         btnLogin.setOnClickListener { openLogin() }
@@ -129,9 +130,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshSamples() {
-        val base = commentBase.text?.toString().orEmpty()
-        val s = Comments.samples(base, 3).joinToString("\n") { "• $it" }
-        commentSamples.text = "변형 예시\n$s"
+        // UI에서 제거됨
     }
 
     // ---------------------------------------------------------------
@@ -219,7 +218,15 @@ class MainActivity : AppCompatActivity() {
                     Phase.POST_ACT -> { pageActed = true; web.postDelayed({ doLikeAndComment() }, 1500) }
                     Phase.ACCEPT_RUN -> { pageActed = true; web.postDelayed({ runJs("window.__NF_acceptAll()") }, 1100) }
                     Phase.SEARCH_COLLECT -> { pageActed = true; web.postDelayed({ runJs("window.__NF_collectBloggers(${JSONObject.quote(currentAccount)})") }, 900) }
-                    Phase.BLOG_ADD -> { pageActed = true; web.postDelayed({ doAddNeighbor() }, 1500) }
+                    Phase.BLOG_ADD -> {
+                        // 신청 폼 페이지(BuddyAddForm)로 이동한 경우 pageActed 무시하고 한 번 더 실행
+                        if (url.contains("BuddyAddForm")) {
+                            web.postDelayed({ doAddNeighbor() }, 1000)
+                        } else if (!pageActed) {
+                            pageActed = true
+                            web.postDelayed({ doAddNeighbor() }, 1500)
+                        }
+                    }
                     Phase.NONE -> {}
                 }
             }
