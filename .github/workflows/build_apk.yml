@@ -61,5 +61,5 @@ jobs:
         run: |
           gh release create latest android/app/build/outputs/apk/debug/app-debug.apk \
             --title "N FriendCl (latest)" \
-            --notes "네이버 블로그 친구/소셜 활동 자동화 앱 - 최신 debug APK (v1.1)" \
+            --notes "네이버 블로그 친구/소셜 활동 자동화 앱 - 최신 debug APK" \
           || gh release upload latest android/app/build/outputs/apk/debug/app-debug.apk --clobber

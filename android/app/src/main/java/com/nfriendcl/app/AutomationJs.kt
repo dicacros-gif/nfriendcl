@@ -392,6 +392,35 @@ object AutomationJs {
     });
   };
 
+  // ---------- 4-b) 이웃 목록에서 친구 블로거 아이디 수집 (소셜활동 보충용) ----------
+  window.__NF_collectBuddies = function(myId,wanted,maxRounds,token){
+    var bad = {postview:1,postlist:1,buddylist:1,news:1,feedlist:1,recommendation:1,
+      rabbitwrite:1,guestbook:1,prologue:1,rss:1,themepost:1,section:1,
+      recommend:1,postthumbnailalbumview:1,ediaryview:1,buddyaddform:1,
+      buddylistmanage:1,buddyrequestreceipt:1,neighbor:1};
+    var mine=(''+(myId||'')).toLowerCase();
+    var ids=[], seen={};
+    function harvest(){
+      var as=edoc().querySelectorAll('a[href]');
+      for (var i=0;i<as.length;i++){
+        var id = extractBlogId(as[i].href);
+        if (!id) continue;
+        id=id.toLowerCase();
+        if (id===mine) continue;
+        if (bad[id]) continue;
+        if (!/[\D]/.test(id)) continue;   // 숫자만이면(logNo 등) 제외
+        if (seen[id]) continue;
+        seen[id]=1; ids.push(id);
+      }
+    }
+    progressiveScan(wanted,maxRounds,harvest,function(){ return ids.length; },function(){
+      log('이웃 '+ids.length+'명 수집');
+      var out={items:ids};
+      if (typeof token!=='undefined') out.token=token;
+      try{ NF.onBuddies(JSON.stringify(out)); }catch(e){}
+    });
+  };
+
   // ---------- 5) (서로)이웃 신청 ----------
   function findAddBtn(d,targetId){
     var els=d.querySelectorAll('a,button,[role=button],.btn_buddy,._buddyAdd');

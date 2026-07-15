@@ -26,6 +26,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.max
+import kotlin.random.Random
 
 /**
  * N FriendCl — 네이버 블로그 친구/소셜 활동 자동화.
@@ -54,10 +55,20 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_FEED_SCROLL_ROUNDS = 120
         private const val MAX_SEARCH_SCROLL_ROUNDS = 60
         private const val SOCIAL_IDLE_RETRY_MS = 15_000L
+        // 이웃새글 피드가 이만큼 연속으로 새 글을 못 주면 친구 블로그의 지난 글로 보충한다.
+        private const val FEED_DRY_LIMIT = 2
+        // 한 친구 블로그에서 한 번에 처리할 글 수 상한(도배처럼 보이지 않게 여러 친구로 분산).
+        private const val PER_BUDDY_POST_CAP = 12
         private val ACCOUNT_ID_PATTERN = Regex("[a-z0-9_-]{2,50}")
     }
 
-    private enum class Phase { NONE, FEED_COLLECT, POST_ACT, ACCEPT_RUN, SEARCH_COLLECT, BLOG_ADD }
+    private enum class Phase {
+        NONE, FEED_COLLECT, POST_ACT, ACCEPT_RUN, SEARCH_COLLECT, BLOG_ADD,
+        BUDDY_LIST_COLLECT, BUDDY_POSTS_COLLECT
+    }
+
+    /** SOCIAL 모드의 글 공급원: 이웃새글 피드 → 마르면 친구 블로그의 지난 글. */
+    private enum class SocialSource { FEED, FRIEND_POSTS }
     private data class JsBatch(val token: Int?, val items: JSONArray)
 
     private lateinit var web: WebView
@@ -82,6 +93,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var neighborMsg: EditText
     private lateinit var topicInput: EditText
     private lateinit var growCountInput: EditText
+    private lateinit var growDelayInput: EditText
+    private var syncingDelay = false
 
     private var currentAccount = Accounts.IDS[0]
     private var appliedAccount: String? = null
@@ -109,6 +122,15 @@ class MainActivity : AppCompatActivity() {
     private var socialNoNewScans = 0
     private var feedScrollRounds = 8
     private var socialActionPending = false
+
+    // SOCIAL 보충: 이웃새글이 마르면 친구 블로그의 지난 글을 이어서 처리
+    private var socialSource = SocialSource.FEED
+    private val socialBloggerQueue = ArrayDeque<String>()
+    private val socialBloggersSeen = LinkedHashSet<String>()
+    private var socialBuddyListDone = false
+    private var socialCurrentBlogger = ""
+    // 공급원을 모두 소진한 횟수. 매 사이클마다 더 깊이 스크롤하고 더 오래 쉰다.
+    private var socialHarvestCycles = 0
 
     private val seenBloggerIds = LinkedHashSet<String>()
     private val growTopicDeck = ArrayDeque<String>()
@@ -153,6 +175,7 @@ class MainActivity : AppCompatActivity() {
         neighborMsg = findViewById(R.id.neighborMsg)
         topicInput = findViewById(R.id.topicInput)
         growCountInput = findViewById(R.id.growCountInput)
+        growDelayInput = findViewById(R.id.growDelayInput)
         btnLogin = findViewById(R.id.btnLogin)
         btnUseCustom = findViewById(R.id.btnUseCustom)
 
@@ -311,7 +334,9 @@ class MainActivity : AppCompatActivity() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 webPageGeneration++
                 if (running && phase == Phase.BLOG_ADD) lastBlogAddUrl = ""
-                if (running && phase == Phase.ACCEPT_RUN) pageActed = false
+                // 리다이렉트 등 두 번째 내비게이션이 일어나도 새 페이지에서 단계 처리가
+                // 다시 걸리도록 초기화(안 하면 이전 예약이 세대 불일치로 조용히 사라져 멈춘다).
+                if (running) pageActed = false
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -337,6 +362,7 @@ class MainActivity : AppCompatActivity() {
                         pageActed = true
                         postForPage(900, finishedPage) {
                             if (phase == Phase.FEED_COLLECT) {
+                                stepToken++ // 페이지 로드 감시 해제, 수집 감시로 교대
                                 val wanted = (
                                     seenPostKeys.size + (target - processed) + 12
                                 ).coerceIn(20, 2_000)
@@ -371,6 +397,7 @@ class MainActivity : AppCompatActivity() {
                         pageActed = true
                         postForPage(900, finishedPage) {
                             if (phase == Phase.SEARCH_COLLECT) {
+                                stepToken++ // 페이지 로드 감시 해제, 수집 감시로 교대
                                 val observed = growTopicObserved[currentGrowTopic] ?: 0
                                 val wanted = (observed + max(20, target - added) + 12)
                                     .coerceIn(20, 2_000)
@@ -398,6 +425,51 @@ class MainActivity : AppCompatActivity() {
                         val wait = if (url.contains("BuddyAddForm")) 1_000L else 1_300L
                         postForPage(wait, finishedPage) {
                             if (phase == Phase.BLOG_ADD) doAddNeighbor()
+                        }
+                    }
+                    Phase.BUDDY_POSTS_COLLECT -> {
+                        pageActed = true
+                        postForPage(900, finishedPage) {
+                            if (phase == Phase.BUDDY_POSTS_COLLECT) {
+                                stepToken++ // 페이지 로드 감시 해제, 수집 감시로 교대
+                                val remaining = (target - processed).coerceAtLeast(1)
+                                // 한 친구당 상한(+여유분)만큼만 긁어 여러 친구로 분산하고,
+                                // 재순환 때마다 상한과 스크롤을 늘려 더 오래된 글까지 본다.
+                                val cap = PER_BUDDY_POST_CAP + socialHarvestCycles * 8
+                                val wanted = (minOf(remaining, cap) + 6).coerceIn(6, 150)
+                                val rounds = (12 + socialHarvestCycles * 10)
+                                    .coerceAtMost(60)
+                                val collectionToken = stepToken
+                                runJs(
+                                    "window.__NF_collectFeed($wanted,$rounds,$collectionToken)"
+                                )
+                                val timeout = (rounds * 3_000L + 15_000L).coerceAtMost(200_000L)
+                                armWatchdog(timeout) {
+                                    dbg("친구 글 수집 응답 없음 → 다음 친구")
+                                    advanceFriendHarvest()
+                                }
+                            }
+                        }
+                    }
+                    Phase.BUDDY_LIST_COLLECT -> {
+                        pageActed = true
+                        postForPage(1100, finishedPage) {
+                            if (phase == Phase.BUDDY_LIST_COLLECT) {
+                                stepToken++ // 페이지 로드 감시 해제, 수집 감시로 교대
+                                val wanted = (target - processed + 40).coerceIn(40, 2_000)
+                                val rounds = 30
+                                val collectionToken = stepToken
+                                runJs(
+                                    "window.__NF_collectBuddies(" +
+                                        "${JSONObject.quote(currentAccount)},$wanted," +
+                                        "$rounds,$collectionToken)"
+                                )
+                                val timeout = (rounds * 2_500L + 15_000L).coerceAtMost(120_000L)
+                                armWatchdog(timeout) {
+                                    dbg("이웃 목록 수집 응답 없음 → 마무리")
+                                    advanceFriendHarvest()
+                                }
+                            }
                         }
                     }
                     Phase.NONE -> {}
@@ -446,6 +518,7 @@ class MainActivity : AppCompatActivity() {
         countInput.setText(socialCount.toString())
         delayInput.setText(delaySeconds.toString())
         growCountInput.setText(growCount.toString())
+        growDelayInput.setText(delaySeconds.toString())
         seq = savedInt(KEY_MESSAGE_SEQUENCE, 0).coerceAtLeast(0)
     }
 
@@ -455,10 +528,26 @@ class MainActivity : AppCompatActivity() {
         }
         delayInput.doAfterTextChanged {
             persistValidNumber(KEY_DELAY_SECONDS, it?.toString(), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+            mirrorDelay(delayInput, growDelayInput, it?.toString())
         }
         growCountInput.doAfterTextChanged {
             persistValidNumber(KEY_GROW_COUNT, it?.toString(), MIN_COUNT, MAX_COUNT)
         }
+        // 동작 간격은 두 섹션(소셜/이웃찾기)이 같은 값을 공유하고 같은 키에 저장한다.
+        growDelayInput.doAfterTextChanged {
+            persistValidNumber(KEY_DELAY_SECONDS, it?.toString(), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+            mirrorDelay(growDelayInput, delayInput, it?.toString())
+        }
+    }
+
+    /** 한쪽 동작 간격 입력을 다른 쪽에 반영(무한 재귀 방지 가드 포함). */
+    private fun mirrorDelay(from: EditText, to: EditText, raw: String?) {
+        if (syncingDelay) return
+        val value = raw?.trim().orEmpty()
+        if (value.isEmpty() || to.text?.toString() == value) return
+        syncingDelay = true
+        to.setText(value)
+        syncingDelay = false
     }
 
     private fun savedInt(key: String, fallback: Int): Int =
@@ -474,6 +563,7 @@ class MainActivity : AppCompatActivity() {
     private fun persistUiSettings() {
         persistValidNumber(KEY_SOCIAL_COUNT, countInput.text?.toString(), MIN_COUNT, MAX_COUNT)
         persistValidNumber(KEY_DELAY_SECONDS, delayInput.text?.toString(), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+        persistValidNumber(KEY_DELAY_SECONDS, growDelayInput.text?.toString(), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
         persistValidNumber(KEY_GROW_COUNT, growCountInput.text?.toString(), MIN_COUNT, MAX_COUNT)
     }
 
@@ -491,11 +581,11 @@ class MainActivity : AppCompatActivity() {
         return value
     }
 
-    private fun readSettings(countView: EditText) {
+    private fun readSettings(countView: EditText, delayView: EditText) {
         val countKey = if (countView === growCountInput) KEY_GROW_COUNT else KEY_SOCIAL_COUNT
         target = readBounded(countView, countKey, MIN_COUNT, MAX_COUNT, DEFAULT_COUNT)
         val sec = readBounded(
-            delayInput,
+            delayView,
             KEY_DELAY_SECONDS,
             MIN_DELAY_SECONDS,
             MAX_DELAY_SECONDS,
@@ -504,7 +594,25 @@ class MainActivity : AppCompatActivity() {
         delayMs = sec * 1000L
     }
 
-    private fun beginRun(m: Phase, firstUrl: String, firstPhase: Phase, countView: EditText = countInput) {
+    /**
+     * 스팸/차단 방지를 위해 기본 간격에 ±몇 초의 난수를 더한 값을 돌려준다.
+     * 가끔(약 12%) 사람처럼 몇 초 더 길게 쉰다. 최소 1.2초는 보장.
+     */
+    private fun jitteredDelay(): Long {
+        val base = delayMs
+        val spread = minOf(3500L, maxOf(1000L, base / 2))
+        var d = base + Random.nextLong(-spread, spread + 1)
+        if (Random.nextInt(100) < 12) d += Random.nextLong(2000L, 6000L)
+        return d.coerceAtLeast(1200L)
+    }
+
+    private fun beginRun(
+        m: Phase,
+        firstUrl: String,
+        firstPhase: Phase,
+        countView: EditText = countInput,
+        delayView: EditText = delayInput
+    ) {
         if (accountApplyInProgress) {
             toast("계정 전환이 끝난 뒤 시작하세요")
             return
@@ -512,7 +620,7 @@ class MainActivity : AppCompatActivity() {
         if (!ensureLoggedInOrPrompt()) {
             // 로그인 안 됐어도 일단 페이지를 열어 로그인 유도(웹뷰 보임)
         }
-        readSettings(countView)
+        readSettings(countView, delayView)
         invalidateScheduledWork()
         mode = m
         running = true
@@ -524,6 +632,25 @@ class MainActivity : AppCompatActivity() {
         btnAcceptHere.visibility = if (m == Phase.ACCEPT_RUN) View.VISIBLE else View.GONE
         progress.visibility = View.VISIBLE
         loadPage(firstUrl, firstPhase)
+        armCollectPageWatchdog(firstPhase)
+    }
+
+    /**
+     * 수집용 페이지 이동이 리다이렉트/로드 실패로 조용히 사라져도 멈추지 않도록
+     * 보조 감시를 건다. 수집이 정상적으로 시작되면 stepToken 교대로 자동 해제된다.
+     */
+    private fun armCollectPageWatchdog(p: Phase) {
+        when (p) {
+            Phase.FEED_COLLECT -> armWatchdog(45_000) {
+                dbg("피드 페이지 응답 없음 → 재시도")
+                scheduleSocialRefill()
+            }
+            Phase.SEARCH_COLLECT -> armWatchdog(45_000) {
+                dbg("검색 페이지 응답 없음 → 다음 주제로 재시도")
+                scheduleGrowRefill()
+            }
+            else -> {}
+        }
     }
 
     private fun ensureLoggedInOrPrompt(): Boolean {
@@ -607,15 +734,22 @@ class MainActivity : AppCompatActivity() {
         socialNoNewScans = 0
         feedScrollRounds = 8
         socialActionPending = false
+        socialSource = SocialSource.FEED
+        socialBloggerQueue.clear()
+        socialBloggersSeen.clear()
+        socialBuddyListDone = false
+        socialCurrentBlogger = ""
+        socialHarvestCycles = 0
         setStatus("$currentAccount · 이웃새글 피드 여는 중…")
-        beginRun(Phase.FEED_COLLECT, Accounts.FEED_URL, Phase.FEED_COLLECT, countInput)
+        beginRun(Phase.FEED_COLLECT, Accounts.FEED_URL, Phase.FEED_COLLECT, countInput, delayInput)
     }
 
     private fun handleUrls(json: String) {
-        if (!running || mode != Phase.FEED_COLLECT || phase != Phase.FEED_COLLECT) return
+        if (!running || mode != Phase.FEED_COLLECT) return
+        if (phase != Phase.FEED_COLLECT && phase != Phase.BUDDY_POSTS_COLLECT) return
         val batch = parseBatch(json)
         if (batch.token != null && batch.token != stepToken) {
-            dbg("지난 피드 수집 응답 무시")
+            dbg("지난 글 수집 응답 무시")
             return
         }
         stepToken++ // 수집 감시 무효화
@@ -624,20 +758,38 @@ class MainActivity : AppCompatActivity() {
         for (i in 0 until arr.length()) {
             val u = arr.optString(i)
             if (u.isBlank()) continue
+            rememberBlogger(u)
             val key = canonicalPostKey(u)
             if (seenPostKeys.add(key)) {
                 queue.addLast(u)
                 fresh++
             }
         }
-        dbg("피드 ${arr.length()}개 확인 · 신규 ${fresh}개 · 누적 ${seenPostKeys.size}개")
+        val label = if (phase == Phase.BUDDY_POSTS_COLLECT) "친구글" else "피드"
+        dbg("$label ${arr.length()}개 확인 · 신규 ${fresh}개 · 누적 ${seenPostKeys.size}개")
         if (fresh == 0) {
-            scheduleSocialRefill()
+            if (socialSource == SocialSource.FEED) scheduleSocialRefill() else advanceFriendHarvest()
             return
         }
         socialNoNewScans = 0
         setStatus("신규 글 ${fresh}개 확보 · 소셜활동 ${processed}/$target")
         processNextPost()
+    }
+
+    /** 글 URL에서 블로거 아이디를 뽑아 친구 글 보충 대상으로 기억한다. */
+    private fun rememberBlogger(url: String) {
+        val id = blogIdOf(url) ?: return
+        if (id == currentAccount) return
+        if (socialBloggersSeen.add(id)) socialBloggerQueue.addLast(id)
+    }
+
+    private fun blogIdOf(url: String): String? {
+        val id = runCatching {
+            val uri = Uri.parse(url)
+            uri.getQueryParameter("blogId")?.takeIf { it.isNotBlank() }
+                ?: uri.pathSegments.orEmpty().firstOrNull { seg -> seg.any(Char::isLetter) }
+        }.getOrNull()?.trim()?.lowercase(Locale.ROOT) ?: return null
+        return id.takeIf { ACCOUNT_ID_PATTERN.matches(it) }
     }
 
     private fun processNextPost() {
@@ -693,8 +845,9 @@ class MainActivity : AppCompatActivity() {
             "글 처리: 공감=$liked 댓글=$commented (${r.optString("msg")})" +
                 if (completed) " · 완료 $processed/$target" else " · 성공 수 미반영"
         )
-        setStatus("소셜활동 $processed/$target · ${delayMs / 1000}초 후 다음")
-        postForRun(delayMs) { processNextPost() }
+        val wait = jitteredDelay()
+        setStatus("소셜활동 $processed/$target · ${wait / 1000}초 후 다음")
+        postForRun(wait) { processNextPost() }
     }
 
     private fun requestMoreSocialPosts() {
@@ -704,13 +857,99 @@ class MainActivity : AppCompatActivity() {
             finishRun("소셜활동 완료 — 글 ${processed}개 처리")
             return
         }
-        socialScanRound++
-        feedScrollRounds = (8 + socialScanRound * 8).coerceAtMost(MAX_FEED_SCROLL_ROUNDS)
+        // 아직 피드가 살아 있으면 시간 범위를 넓혀 이웃새글을 더 긁어온다.
+        if (socialSource == SocialSource.FEED && socialNoNewScans < FEED_DRY_LIMIT) {
+            socialScanRound++
+            feedScrollRounds = (8 + socialScanRound * 8).coerceAtMost(MAX_FEED_SCROLL_ROUNDS)
+            setStatus(
+                "목표 ${processed}/$target · 이웃 새글 시간 범위를 더 넓혀 찾는 중 " +
+                    "(${feedScrollRounds}단계)"
+            )
+            loadPage(Accounts.FEED_URL, Phase.FEED_COLLECT)
+            armCollectPageWatchdog(Phase.FEED_COLLECT)
+            return
+        }
+        // 피드가 말랐다 → 친구 블로그의 지난 글로 목표 숫자까지 계속 이어간다.
+        if (socialSource == SocialSource.FEED) {
+            socialSource = SocialSource.FRIEND_POSTS
+            dbg("이웃 새글이 부족해 친구들의 지난 글을 더 찾습니다")
+        }
+        advanceFriendHarvest()
+    }
+
+    /**
+     * 친구 블로그의 지난 글을 한 명씩 순회하며 보충한다.
+     * 피드에서 본 이웃 → (부족하면) 이웃 목록에서 더 모은 친구 순으로 진행하고,
+     * 더 이상 찾을 곳이 없을 때만 종료한다.
+     */
+    private fun advanceFriendHarvest() {
+        if (!running || mode != Phase.FEED_COLLECT) return
+        if (socialActionPending || queue.isNotEmpty()) return
+        if (processed >= target) {
+            finishRun("소셜활동 완료 — 글 ${processed}개 처리")
+            return
+        }
+        if (socialBloggerQueue.isNotEmpty()) {
+            socialCurrentBlogger = socialBloggerQueue.removeFirst()
+            setStatus("친구 '$socialCurrentBlogger' 지난 글에서 이어가는 중 · ${processed}/$target")
+            loadPage(Accounts.postListUrl(socialCurrentBlogger), Phase.BUDDY_POSTS_COLLECT)
+            armWatchdog(45_000) {
+                dbg("'$socialCurrentBlogger' 글 응답 없음 → 다음 친구")
+                postForRun(1_000) { advanceFriendHarvest() }
+            }
+            return
+        }
+        if (!socialBuddyListDone) {
+            socialBuddyListDone = true
+            setStatus("이웃 목록에서 친구 블로그를 더 모으는 중 · ${processed}/$target")
+            loadPage(Accounts.buddyListUrl(currentAccount), Phase.BUDDY_LIST_COLLECT)
+            armWatchdog(45_000) {
+                dbg("이웃 목록 응답 없음 → 다음 사이클")
+                postForRun(1_000) { advanceFriendHarvest() }
+            }
+            return
+        }
+        // 목표를 못 채웠으면 종료하지 않는다. 잠시 쉬었다가 피드부터 다시 순환하고,
+        // 알고 있는 친구 전원을 더 깊은 스크롤로 재방문해 지난 글을 계속 보충한다.
+        socialHarvestCycles++
+        socialSource = SocialSource.FEED
+        socialNoNewScans = 0
+        socialScanRound = 0
+        feedScrollRounds = 8
+        socialBuddyListDone = false
+        socialBloggerQueue.clear()
+        socialBloggersSeen.shuffled().forEach(socialBloggerQueue::addLast)
+        val waitMs = max(delayMs, minOf(20_000L + socialHarvestCycles * 15_000L, 120_000L))
         setStatus(
-            "목표 ${processed}/$target · 이웃 글 범위를 더 넓혀 찾는 중 " +
-                "(${feedScrollRounds}단계)"
+            "한 바퀴 다 돌았어요 · ${processed}/$target · ${waitMs / 1000}초 후 " +
+                "새 글부터 다시 탐색 (${socialHarvestCycles}번째 재순환)"
         )
-        loadPage(Accounts.FEED_URL, Phase.FEED_COLLECT)
+        dbg("공급원 소진 → ${waitMs / 1000}초 뒤 재순환 (친구 ${socialBloggerQueue.size}명 재방문 예정)")
+        postForRun(waitMs) {
+            if (queue.isEmpty() && !socialActionPending) requestMoreSocialPosts()
+        }
+    }
+
+    private fun handleBuddies(json: String) {
+        if (!running || mode != Phase.FEED_COLLECT || phase != Phase.BUDDY_LIST_COLLECT) return
+        val batch = parseBatch(json)
+        if (batch.token != null && batch.token != stepToken) {
+            dbg("지난 이웃 목록 응답 무시")
+            return
+        }
+        stepToken++
+        val arr = batch.items
+        var fresh = 0
+        for (i in 0 until arr.length()) {
+            val id = arr.optString(i).trim().lowercase(Locale.ROOT)
+            if (!ACCOUNT_ID_PATTERN.matches(id) || id == currentAccount) continue
+            if (socialBloggersSeen.add(id)) {
+                socialBloggerQueue.addLast(id)
+                fresh++
+            }
+        }
+        dbg("이웃 목록 ${arr.length()}명 확인 · 새 친구 ${fresh}명 · 누적 ${socialBloggersSeen.size}명")
+        advanceFriendHarvest()
     }
 
     private fun scheduleSocialRefill() {
@@ -805,7 +1044,8 @@ class MainActivity : AppCompatActivity() {
             Phase.SEARCH_COLLECT,
             Accounts.blogSearchUrl(currentGrowTopic),
             Phase.SEARCH_COLLECT,
-            growCountInput
+            growCountInput,
+            growDelayInput
         )
     }
 
@@ -902,8 +1142,9 @@ class MainActivity : AppCompatActivity() {
         pendingBlogger = ""
         pendingNeighborMessage = ""
         neighborFormVisited = false
-        setStatus("이웃 신청 $added/$target · ${delayMs / 1000}초 후 다음")
-        postForRun(delayMs) { processNextBlogger() }
+        val wait = jitteredDelay()
+        setStatus("이웃 신청 $added/$target · ${wait / 1000}초 후 다음")
+        postForRun(wait) { processNextBlogger() }
     }
 
     private fun requestMoreGrowCandidates() {
@@ -923,6 +1164,7 @@ class MainActivity : AppCompatActivity() {
                 "(${searchScrollRounds}단계)"
         )
         loadPage(Accounts.blogSearchUrl(currentGrowTopic), Phase.SEARCH_COLLECT)
+        armCollectPageWatchdog(Phase.SEARCH_COLLECT)
     }
 
     private fun scheduleGrowRefill() {
@@ -933,7 +1175,10 @@ class MainActivity : AppCompatActivity() {
             growNoNewSearches <= 6 -> max(delayMs, 5_000L)
             else -> max(delayMs, 30_000L)
         }
-        setStatus("'$currentGrowTopic' 신규 후보 없음 · ${waitMs / 1000}초 후 다른 주제 검색")
+        setStatus(
+            "'$currentGrowTopic' 검색에서 새 블로거 없음 · ${waitMs / 1000}초 후 " +
+                "다음 랜덤 주제로 자동 재시도 ($added/$target)"
+        )
         val expectedStep = stepToken
         postForRun(waitMs) {
             if (
@@ -973,6 +1218,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun onActed(json: String) = runOnUiThread { handleActed(json) }
         @JavascriptInterface fun onAccept(json: String) = runOnUiThread { handleAccept(json) }
         @JavascriptInterface fun onBloggers(json: String) = runOnUiThread { handleBloggers(json) }
+        @JavascriptInterface fun onBuddies(json: String) = runOnUiThread { handleBuddies(json) }
         @JavascriptInterface fun onAdd(json: String) = runOnUiThread { handleAdd(json) }
         @JavascriptInterface fun onLogin(b: Boolean) = runOnUiThread { if (b) onNeedLoginUi() }
         @JavascriptInterface fun onNeedLogin() = runOnUiThread { onNeedLoginUi() }

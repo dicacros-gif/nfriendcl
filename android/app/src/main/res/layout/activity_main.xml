@@ -437,26 +437,67 @@
                     android:inputType="text"
                     android:maxLines="1" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="신청 인원수 (몇 명에게 신청할지)"
-                    android:textColor="#9a9a9a"
-                    android:textSize="12sp" />
-
-                <EditText
-                    android:id="@+id/growCountInput"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="20"
-                    android:textColor="#f0f0f0"
-                    android:textSize="14sp"
-                    android:background="#1c1c1c"
-                    android:padding="10dp"
-                    android:layout_marginTop="4dp"
-                    android:inputType="number"
-                    android:maxLines="1" />
+                    android:orientation="horizontal"
+                    android:layout_marginTop="10dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="신청 인원수 (몇 명에게 신청할지)"
+                            android:textColor="#9a9a9a"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/growCountInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="20"
+                            android:textColor="#f0f0f0"
+                            android:textSize="14sp"
+                            android:background="#1c1c1c"
+                            android:padding="10dp"
+                            android:layout_marginTop="2dp"
+                            android:inputType="number"
+                            android:maxLines="1" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="8dp"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="동작 간격(초)"
+                            android:textColor="#9a9a9a"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/growDelayInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="5"
+                            android:textColor="#f0f0f0"
+                            android:textSize="14sp"
+                            android:background="#1c1c1c"
+                            android:padding="10dp"
+                            android:layout_marginTop="2dp"
+                            android:inputType="number"
+                            android:maxLines="1" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <Button
                     android:id="@+id/btnGrow"

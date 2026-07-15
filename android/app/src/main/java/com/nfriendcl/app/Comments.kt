@@ -27,7 +27,10 @@ object Comments {
     private val recentComments = RecentLru(RECENT_CAPACITY)
     private val recentNeighborMessages = RecentLru(RECENT_CAPACITY)
 
-    private val emojis = listOf("😊", "👍", "🙏", "✨", "🌿", "😄", "🍀", "🌸")
+    private val emojis = listOf(
+        "😊", "👍", "🙏", "✨", "🌿", "😄", "🍀", "🌸",
+        "💚", "☕", "🌷", "🙂", "👏", "🌻", "😃", "🍃"
+    )
 
     private val commentOpeners = listOf(
         "좋은 글 잘 읽었어요",
@@ -41,7 +44,13 @@ object Comments {
         "포스팅 천천히 살펴보고 갑니다",
         "알찬 내용 잘 읽었어요",
         "소중한 글 잘 보고 갑니다",
-        "오늘 포스팅도 잘 읽었어요"
+        "오늘 포스팅도 잘 읽었어요",
+        "글 하나하나 정성이 담겨 있네요",
+        "지나가다 글에 이끌려 들렀어요",
+        "오늘도 반가운 마음으로 들렀습니다",
+        "따뜻한 글 잘 읽고 갑니다",
+        "천천히 읽어 내려가며 공감했어요",
+        "오랜만에 마음에 남는 글 만났어요"
     )
 
     private val commentReactions = listOf(
@@ -54,7 +63,12 @@ object Comments {
         "한 번 더 생각해 보게 되는 내용이었어요",
         "편안하게 읽을 수 있는 글이었어요",
         "필요한 내용을 잘 살펴보고 갑니다",
-        "정성껏 전해 주신 내용 잘 봤어요"
+        "정성껏 전해 주신 내용 잘 봤어요",
+        "사진도 글도 참 정갈하네요",
+        "읽는 내내 기분이 좋아졌어요",
+        "덕분에 새로운 걸 알게 됐어요",
+        "글에서 따뜻함이 전해집니다",
+        "생각을 정리하는 데 도움이 됐어요"
     )
 
     private val commentWishes = listOf(
@@ -65,7 +79,11 @@ object Comments {
         "남은 하루도 즐겁게 보내세요",
         "이번 주도 좋은 일 가득하세요",
         "따뜻하고 여유로운 하루 보내세요",
-        "오늘 하루도 힘내세요"
+        "오늘 하루도 힘내세요",
+        "행복한 하루 되시길 바라요",
+        "포근한 하루 보내세요",
+        "즐거운 일만 가득한 하루 되세요",
+        "몸도 마음도 편안한 하루 보내세요"
     )
 
     private val commentClosers = listOf(
@@ -76,7 +94,11 @@ object Comments {
         "꾸준히 좋은 글 만나고 싶어요",
         "또 들러서 천천히 읽어볼게요",
         "앞으로도 좋은 소식 기다릴게요",
-        "다음 포스팅도 잘 보러 올게요"
+        "다음 포스팅도 잘 보러 올게요",
+        "종종 들러 소통하고 싶어요",
+        "다음 이야기도 궁금해집니다",
+        "자주 찾아와 읽고 갈게요",
+        "앞으로의 글도 응원할게요"
     )
 
     private val customCommentPrefixes = listOf(
@@ -220,20 +242,26 @@ object Comments {
     }
 
     private fun defaultComment(random: Random): String {
-        val sentences = when (random.nextInt(8)) {
+        val sentences = when (random.nextInt(10)) {
             0 -> listOf(pick(random, commentOpeners))
             1 -> listOf(pick(random, commentReactions))
             2 -> listOf(pick(random, commentOpeners), pick(random, commentWishes))
             3 -> listOf(pick(random, commentOpeners), pick(random, commentClosers))
             4 -> listOf(pick(random, commentReactions), pick(random, commentWishes))
-            5 -> listOf(
+            5 -> listOf(pick(random, commentReactions), pick(random, commentClosers))
+            6 -> listOf(
                 pick(random, commentOpeners),
                 pick(random, commentReactions),
                 pick(random, commentWishes)
             )
-            6 -> listOf(
+            7 -> listOf(
                 pick(random, commentOpeners),
                 pick(random, commentReactions),
+                pick(random, commentClosers)
+            )
+            8 -> listOf(
+                pick(random, commentReactions),
+                pick(random, commentWishes),
                 pick(random, commentClosers)
             )
             else -> listOf(

@@ -40,6 +40,9 @@ object Accounts {
     /** 이웃 목록 / 서로이웃 신청 관리 진입점(예비) */
     fun buddyListUrl(id: String) = "https://m.blog.naver.com/BuddyList.naver?blogId=$id"
 
+    /** 특정 블로거의 글 목록(피드가 마르면 친구의 지난 글을 더 찾는 용도) */
+    fun postListUrl(id: String) = "https://m.blog.naver.com/PostList.naver?blogId=$id"
+
     /** 주제(키워드)로 모바일 블로그 검색 */
     fun blogSearchUrl(topic: String): String {
         val q = URLEncoder.encode(topic.trim(), "UTF-8")
