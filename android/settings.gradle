@@ -5,9 +5,9 @@ pluginManagement {
         gradlePluginPortal()
     }
 }
-plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.10.0'
-}
+// foojay-resolver-convention 제거: JDK 툴체인 자동 다운로드가 필요 없고(CI가 JDK17 제공,
+// 프로젝트는 Java/Kotlin 17 고정), 이 플러그인이 끌어오는 bcprov jar 계측 실패로
+// 구성 단계 빌드가 반복 실패했다.
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
