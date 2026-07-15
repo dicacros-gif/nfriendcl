@@ -38,9 +38,12 @@
                 android:layout_height="wrap_content"
                 android:text="macdcross"
                 android:textSize="11sp"
+                android:textColor="@color/account_button_text"
                 android:minWidth="0dp"
                 android:paddingStart="10dp"
-                android:paddingEnd="10dp" />
+                android:paddingEnd="10dp"
+                app:backgroundTint="@color/account_button_background"
+                app:strokeColor="@color/account_button_stroke" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnAcc2"
@@ -49,9 +52,12 @@
                 android:layout_height="wrap_content"
                 android:text="dicajohn"
                 android:textSize="11sp"
+                android:textColor="@color/account_button_text"
                 android:minWidth="0dp"
                 android:paddingStart="10dp"
-                android:paddingEnd="10dp" />
+                android:paddingEnd="10dp"
+                app:backgroundTint="@color/account_button_background"
+                app:strokeColor="@color/account_button_stroke" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
     </LinearLayout>
 
@@ -413,7 +419,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="주제 키워드"
+                    android:text="주제 키워드 (비워 두면 다양한 주제를 자동 순환)"
                     android:textColor="#9a9a9a"
                     android:textSize="12sp" />
 
@@ -421,7 +427,7 @@
                     android:id="@+id/topicInput"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="예: 맛집, 여행, 재테크, 육아"
+                    android:hint="선택 입력 · 여러 개는 쉼표로 구분"
                     android:textColor="#f0f0f0"
                     android:textColorHint="#5a5a5a"
                     android:textSize="14sp"

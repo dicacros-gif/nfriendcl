@@ -3,6 +3,7 @@ package com.nfriendcl.app
 import android.content.Context
 import android.webkit.CookieManager
 import java.net.URLEncoder
+import java.util.Locale
 
 /**
  * 네이버 계정(dicajohn / macdcross + 사용자가 직접 입력한 임의 아이디)을 쿠키 스냅샷으로 관리한다.
@@ -15,8 +16,10 @@ import java.net.URLEncoder
  */
 object Accounts {
 
+    data class SavedSelection(val id: String, val isCustom: Boolean)
+
     /**
-     * 토글 버튼에 노출되는 기본 계정. IDS[0] 이 앱 시작 시 기본 선택(고정) 계정.
+     * 토글 버튼에 노출되는 기본 계정. 저장된 선택이 없을 때만 IDS[0] 을 사용한다.
      * 그 외 아이디는 사용자가 직접 입력.
      */
     val IDS = listOf("macdcross", "dicajohn")
@@ -44,6 +47,8 @@ object Accounts {
     }
 
     private const val PREFS = "nfriendcl_accounts"
+    private const val KEY_LAST_SELECTED_ID = "last_selected_id"
+    private const val KEY_LAST_SELECTED_IS_CUSTOM = "last_selected_is_custom"
     private val HOSTS = listOf(
         "https://naver.com",
         "https://www.naver.com",
@@ -54,6 +59,35 @@ object Accounts {
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private fun normalizeId(id: String): String = id.trim().lowercase(Locale.ROOT)
+
+    fun loadSelection(ctx: Context): SavedSelection {
+        val preferences = prefs(ctx)
+        val id = normalizeId(preferences.getString(KEY_LAST_SELECTED_ID, "").orEmpty())
+        val isCustom = preferences.getBoolean(KEY_LAST_SELECTED_IS_CUSTOM, false)
+
+        if (id.isBlank()) return SavedSelection(normalizeId(IDS.first()), false)
+        if (isCustom) return SavedSelection(id, true)
+
+        val preset = IDS.firstOrNull { normalizeId(it) == id }
+        return SavedSelection(normalizeId(preset ?: IDS.first()), false)
+    }
+
+    fun saveSelection(ctx: Context, id: String, isCustom: Boolean) {
+        val normalized = normalizeId(id)
+        val selection = if (isCustom && normalized.isNotBlank()) {
+            SavedSelection(normalized, true)
+        } else {
+            val preset = IDS.firstOrNull { normalizeId(it) == normalized } ?: IDS.first()
+            SavedSelection(normalizeId(preset), false)
+        }
+
+        prefs(ctx).edit()
+            .putString(KEY_LAST_SELECTED_ID, selection.id)
+            .putBoolean(KEY_LAST_SELECTED_IS_CUSTOM, selection.isCustom)
+            .apply()
+    }
 
     /** 현재 CookieManager 의 네이버 쿠키를 "n=v; n2=v2" 문자열로 병합 */
     fun snapshotCurrent(): String {

@@ -1,6 +1,8 @@
 package com.nfriendcl.app
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.webkit.CookieManager
@@ -17,10 +19,13 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
+import kotlin.math.max
 
 /**
  * N FriendCl — 네이버 블로그 친구/소셜 활동 자동화.
@@ -34,7 +39,26 @@ import org.json.JSONObject
  */
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        private const val UI_PREFS = "nfriendcl_ui_settings"
+        private const val KEY_SOCIAL_COUNT = "social_target_count"
+        private const val KEY_DELAY_SECONDS = "action_delay_seconds"
+        private const val KEY_GROW_COUNT = "grow_target_count"
+        private const val KEY_MESSAGE_SEQUENCE = "message_sequence"
+        private const val DEFAULT_COUNT = 20
+        private const val DEFAULT_DELAY_SECONDS = 5
+        private const val MIN_COUNT = 1
+        private const val MAX_COUNT = 500
+        private const val MIN_DELAY_SECONDS = 2
+        private const val MAX_DELAY_SECONDS = 120
+        private const val MAX_FEED_SCROLL_ROUNDS = 120
+        private const val MAX_SEARCH_SCROLL_ROUNDS = 60
+        private const val SOCIAL_IDLE_RETRY_MS = 15_000L
+        private val ACCOUNT_ID_PATTERN = Regex("[a-z0-9_-]{2,50}")
+    }
+
     private enum class Phase { NONE, FEED_COLLECT, POST_ACT, ACCEPT_RUN, SEARCH_COLLECT, BLOG_ADD }
+    private data class JsBatch(val token: Int?, val items: JSONArray)
 
     private lateinit var web: WebView
     private lateinit var form: ScrollView
@@ -45,12 +69,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStop: Button
     private lateinit var btnAcceptHere: Button
     private lateinit var btnLogin: Button
+    private lateinit var btnUseCustom: Button
 
     private lateinit var accountGroup: MaterialButtonToggleGroup
     private lateinit var customId: EditText
     private lateinit var currentAccountText: TextView
     private lateinit var commentBase: EditText
-    private var commentSamples: TextView? = null
     private lateinit var swLike: SwitchCompat
     private lateinit var swComment: SwitchCompat
     private lateinit var countInput: EditText
@@ -60,11 +84,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var growCountInput: EditText
 
     private var currentAccount = Accounts.IDS[0]
+    private var appliedAccount: String? = null
+    private var accountApplyInProgress = false
+    private var accountApplyGeneration = 0
 
     private var mode = Phase.NONE
     private var phase = Phase.NONE
     private var running = false
     private var pageActed = false
+    private var lastBlogAddUrl = ""
+    private var webPageGeneration = 0
 
     private val queue = ArrayDeque<String>()
     private var processed = 0      // SOCIAL: 처리한 글 수
@@ -73,8 +102,30 @@ class MainActivity : AppCompatActivity() {
     private var delayMs = 5000L
     private var seq = 0            // 댓글/메시지 변형 시드
     private var stepToken = 0      // 응답 없음 감시용 토큰
+    private var runToken = 0L      // 이전 실행의 지연 콜백 차단
+
+    private val seenPostKeys = LinkedHashSet<String>()
+    private var socialScanRound = 0
+    private var socialNoNewScans = 0
+    private var feedScrollRounds = 8
+    private var socialActionPending = false
+
+    private val seenBloggerIds = LinkedHashSet<String>()
+    private val growTopicDeck = ArrayDeque<String>()
+    private val growTopicDepth = mutableMapOf<String, Int>()
+    private val growTopicObserved = mutableMapOf<String, Int>()
+    private var manualTopics = emptyList<String>()
+    private var lastGrowTopic: String? = null
+    private var currentGrowTopic = ""
+    private var growSearchRound = 0
+    private var growNoNewSearches = 0
+    private var searchScrollRounds = 8
+    private var pendingBlogger = ""
+    private var pendingNeighborMessage = ""
+    private var neighborFormVisited = false
 
     private val logLines = ArrayDeque<String>()
+    private val uiPrefs by lazy { getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE) }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,17 +154,20 @@ class MainActivity : AppCompatActivity() {
         topicInput = findViewById(R.id.topicInput)
         growCountInput = findViewById(R.id.growCountInput)
         btnLogin = findViewById(R.id.btnLogin)
+        btnUseCustom = findViewById(R.id.btnUseCustom)
 
         commentBase.setText(Comments.DEFAULT_BASE)
         neighborMsg.setText(Comments.DEFAULT_NEIGHBOR_MSG)
+        restoreUiSettings()
+        setupSettingsPersistence()
         
         findViewById<Button>(R.id.btnRefreshComment).setOnClickListener {
             val base = commentBase.text?.toString().orEmpty()
-            toast("변형 예시:\n" + Comments.comment(base, seq++))
+            toast("변형 예시:\n" + Comments.comment(base, nextMessageSequence()))
         }
         findViewById<Button>(R.id.btnRefreshNeighborMsg).setOnClickListener {
             val base = neighborMsg.text?.toString().orEmpty()
-            toast("변형 예시:\n" + Comments.neighborMessage(base, seq++))
+            toast("변형 예시:\n" + Comments.neighborMessage(base, nextMessageSequence()))
         }
 
         setupWeb()
@@ -121,7 +175,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnSocial).setOnClickListener { startSocial() }
         findViewById<Button>(R.id.btnGrow).setOnClickListener { startGrow() }
-        findViewById<Button>(R.id.btnUseCustom).setOnClickListener { useCustomId() }
+        btnUseCustom.setOnClickListener { useCustomId() }
         btnLogin.setOnClickListener { openLogin() }
         btnStop.setOnClickListener { stopAll() }
         btnAcceptHere.setOnClickListener { acceptHere() }
@@ -129,38 +183,92 @@ class MainActivity : AppCompatActivity() {
         showRunning(false)
     }
 
-    private fun refreshSamples() {
-        // UI에서 제거됨
-    }
-
     // ---------------------------------------------------------------
     //  계정
     // ---------------------------------------------------------------
     private fun setupAccounts() {
-        findViewById<MaterialButton>(R.id.btnAcc1).text = Accounts.IDS[0]
-        findViewById<MaterialButton>(R.id.btnAcc2).text = Accounts.IDS[1]
-        accountGroup.check(R.id.btnAcc1)
-        Accounts.applyTo(this, currentAccount) { had -> updateAccountLabel(had) }
+        val acc1 = findViewById<MaterialButton>(R.id.btnAcc1)
+        val acc2 = findViewById<MaterialButton>(R.id.btnAcc2)
+        acc1.text = Accounts.IDS[0]
+        acc2.text = Accounts.IDS[1]
+
+        val saved = Accounts.loadSelection(this)
+        currentAccount = saved.id
+        if (saved.isCustom) {
+            accountGroup.clearChecked()
+            customId.setText(saved.id)
+        } else {
+            accountGroup.check(if (saved.id == Accounts.IDS[1]) R.id.btnAcc2 else R.id.btnAcc1)
+        }
+
         accountGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
-            val picked = if (checkedId == R.id.btnAcc1) Accounts.IDS[0] else Accounts.IDS[1]
-            switchAccount(picked)
+            val picked = when (checkedId) {
+                R.id.btnAcc1 -> Accounts.IDS[0]
+                R.id.btnAcc2 -> Accounts.IDS[1]
+                else -> return@addOnButtonCheckedListener
+            }
+            switchAccount(picked, isCustom = false)
         }
+        applyAccount(currentAccount)
     }
 
     private fun useCustomId() {
-        val id = customId.text?.toString()?.trim()?.lowercase()
+        val id = customId.text?.toString()?.trim()?.lowercase(Locale.ROOT)
         if (id.isNullOrBlank()) { toast("아이디를 입력하세요"); return }
+        if (!ACCOUNT_ID_PATTERN.matches(id)) {
+            toast("아이디는 영문 소문자, 숫자, _, -만 입력하세요")
+            return
+        }
         accountGroup.clearChecked()
-        switchAccount(id)
+        customId.setText(id)
+        switchAccount(id, isCustom = true)
         toast("$id 계정 사용")
     }
 
-    private fun switchAccount(targetId: String) {
-        if (targetId == currentAccount) { updateAccountLabel(Accounts.hasSession(this, targetId)); return }
-        if (Accounts.isLoggedIn()) Accounts.saveCurrentFor(this, currentAccount)
+    private fun switchAccount(targetId: String, isCustom: Boolean) {
+        if (running) {
+            toast("진행 중인 작업을 정지한 뒤 계정을 바꾸세요")
+            return
+        }
+        if (accountApplyInProgress) {
+            toast("계정 전환이 끝난 뒤 다시 선택하세요")
+            return
+        }
+        Accounts.saveSelection(this, targetId, isCustom)
+        if (targetId == currentAccount && appliedAccount == targetId) {
+            updateAccountLabel(Accounts.hasSession(this, targetId))
+            return
+        }
+        appliedAccount?.let { applied ->
+            if (Accounts.isLoggedIn()) Accounts.saveCurrentFor(this, applied)
+        }
         currentAccount = targetId
-        Accounts.applyTo(this, targetId) { had -> updateAccountLabel(had) }
+        applyAccount(targetId)
+    }
+
+    private fun applyAccount(targetId: String) {
+        val generation = ++accountApplyGeneration
+        accountApplyInProgress = true
+        setAccountControlsEnabled(false)
+        currentAccountText.text = "현재 계정: $targetId (전환 중…)"
+        Accounts.applyTo(this, targetId) { had ->
+            runOnUiThread {
+                if (generation != accountApplyGeneration) return@runOnUiThread
+                accountApplyInProgress = false
+                appliedAccount = targetId
+                setAccountControlsEnabled(true)
+                if (currentAccount == targetId) updateAccountLabel(had)
+            }
+        }
+    }
+
+    private fun setAccountControlsEnabled(enabled: Boolean) {
+        findViewById<MaterialButton>(R.id.btnAcc1).isEnabled = enabled
+        findViewById<MaterialButton>(R.id.btnAcc2).isEnabled = enabled
+        customId.isEnabled = enabled
+        btnUseCustom.isEnabled = enabled
+        btnLogin.isEnabled = enabled
     }
 
     private fun updateAccountLabel(hadSession: Boolean) {
@@ -200,10 +308,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         web.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                webPageGeneration++
+                if (running && phase == Phase.BLOG_ADD) lastBlogAddUrl = ""
+                if (running && phase == Phase.ACCEPT_RUN) pageActed = false
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 if (url == null) return
-                if (Accounts.isLoggedIn()) {
-                    Accounts.saveCurrentFor(this@MainActivity, currentAccount)
+                val finishedPage = webPageGeneration
+                if (
+                    !accountApplyInProgress &&
+                    appliedAccount == currentAccount &&
+                    Accounts.isLoggedIn()
+                ) {
+                    Accounts.saveCurrentFor(this@MainActivity, appliedAccount!!)
                     if (!running) {
                         updateAccountLabel(true)
                         setStatus("$currentAccount 로그인 완료 — '■ 정지 / 홈'을 눌러 돌아가세요")
@@ -212,19 +331,73 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (!running) return
                 if (url.contains("nid.naver.com")) { onNeedLoginUi(); return }
-                if (pageActed) return
+                if (pageActed && phase != Phase.BLOG_ADD) return
                 when (phase) {
-                    Phase.FEED_COLLECT -> { pageActed = true; web.postDelayed({ runJs("window.__NF_collectFeed()") }, 900) }
-                    Phase.POST_ACT -> { pageActed = true; web.postDelayed({ doLikeAndComment() }, 1500) }
-                    Phase.ACCEPT_RUN -> { pageActed = true; web.postDelayed({ runJs("window.__NF_acceptAll()") }, 1100) }
-                    Phase.SEARCH_COLLECT -> { pageActed = true; web.postDelayed({ runJs("window.__NF_collectBloggers(${JSONObject.quote(currentAccount)})") }, 900) }
+                    Phase.FEED_COLLECT -> {
+                        pageActed = true
+                        postForPage(900, finishedPage) {
+                            if (phase == Phase.FEED_COLLECT) {
+                                val wanted = (
+                                    seenPostKeys.size + (target - processed) + 12
+                                ).coerceIn(20, 2_000)
+                                val collectionToken = stepToken
+                                runJs(
+                                    "window.__NF_collectFeed($wanted,$feedScrollRounds,$collectionToken)"
+                                )
+                                val timeout = (feedScrollRounds * 3_000L + 15_000L)
+                                    .coerceAtMost(390_000L)
+                                armWatchdog(timeout) {
+                                    dbg("피드 수집 응답 없음 → 범위를 늘려 다시 시도")
+                                    scheduleSocialRefill()
+                                }
+                            }
+                        }
+                    }
+                    Phase.POST_ACT -> {
+                        pageActed = true
+                        postForPage(1500, finishedPage) {
+                            if (phase == Phase.POST_ACT) doLikeAndComment()
+                        }
+                    }
+                    Phase.ACCEPT_RUN -> {
+                        pageActed = true
+                        postForPage(1100, finishedPage) {
+                            if (phase == Phase.ACCEPT_RUN) {
+                                runJs("window.__NF_acceptAll($stepToken)")
+                            }
+                        }
+                    }
+                    Phase.SEARCH_COLLECT -> {
+                        pageActed = true
+                        postForPage(900, finishedPage) {
+                            if (phase == Phase.SEARCH_COLLECT) {
+                                val observed = growTopicObserved[currentGrowTopic] ?: 0
+                                val wanted = (observed + max(20, target - added) + 12)
+                                    .coerceIn(20, 2_000)
+                                val collectionToken = stepToken
+                                runJs(
+                                    "window.__NF_collectBloggers(" +
+                                        "${JSONObject.quote(currentAccount)},$wanted," +
+                                        "$searchScrollRounds,$collectionToken)"
+                                )
+                                val timeout = (searchScrollRounds * 3_000L + 15_000L)
+                                    .coerceAtMost(210_000L)
+                                armWatchdog(timeout) {
+                                    dbg("검색 수집 응답 없음 → 다음 주제로 이동")
+                                    scheduleGrowRefill()
+                                }
+                            }
+                        }
+                    }
                     Phase.BLOG_ADD -> {
-                        // 신청 폼 페이지(BuddyAddForm)로 이동한 경우 pageActed 무시하고 한 번 더 실행
-                        if (url.contains("BuddyAddForm")) {
-                            web.postDelayed({ doAddNeighbor() }, 1000)
-                        } else if (!pageActed) {
-                            pageActed = true
-                            web.postDelayed({ doAddNeighbor() }, 1500)
+                        // 홈 → 신청 폼 → 결과 페이지로 이동할 때마다 같은 pending 요청을 한 번씩 이어서 처리한다.
+                        if (url == lastBlogAddUrl || pendingBlogger.isBlank()) return
+                        lastBlogAddUrl = url
+                        if (url.contains("BuddyAddForm")) neighborFormVisited = true
+                        pageActed = true
+                        val wait = if (url.contains("BuddyAddForm")) 1_000L else 1_300L
+                        postForPage(wait, finishedPage) {
+                            if (phase == Phase.BLOG_ADD) doAddNeighbor()
                         }
                     }
                     Phase.NONE -> {}
@@ -247,28 +420,104 @@ class MainActivity : AppCompatActivity() {
 
     private fun runJs(call: String) {
         if (!running) return
-        web.evaluateJavascript(AutomationJs.SCRIPT) { web.evaluateJavascript(call, null) }
+        val expectedRun = runToken
+        val expectedStep = stepToken
+        val expectedPage = webPageGeneration
+        web.evaluateJavascript(AutomationJs.SCRIPT) {
+            if (
+                running &&
+                runToken == expectedRun &&
+                stepToken == expectedStep &&
+                webPageGeneration == expectedPage
+            ) {
+                web.evaluateJavascript(call, null)
+            }
+        }
     }
 
     // ---------------------------------------------------------------
     //  공통 실행 제어
     // ---------------------------------------------------------------
+    private fun restoreUiSettings() {
+        val socialCount = savedInt(KEY_SOCIAL_COUNT, DEFAULT_COUNT).coerceIn(MIN_COUNT, MAX_COUNT)
+        val delaySeconds = savedInt(KEY_DELAY_SECONDS, DEFAULT_DELAY_SECONDS)
+            .coerceIn(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+        val growCount = savedInt(KEY_GROW_COUNT, DEFAULT_COUNT).coerceIn(MIN_COUNT, MAX_COUNT)
+        countInput.setText(socialCount.toString())
+        delayInput.setText(delaySeconds.toString())
+        growCountInput.setText(growCount.toString())
+        seq = savedInt(KEY_MESSAGE_SEQUENCE, 0).coerceAtLeast(0)
+    }
+
+    private fun setupSettingsPersistence() {
+        countInput.doAfterTextChanged {
+            persistValidNumber(KEY_SOCIAL_COUNT, it?.toString(), MIN_COUNT, MAX_COUNT)
+        }
+        delayInput.doAfterTextChanged {
+            persistValidNumber(KEY_DELAY_SECONDS, it?.toString(), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+        }
+        growCountInput.doAfterTextChanged {
+            persistValidNumber(KEY_GROW_COUNT, it?.toString(), MIN_COUNT, MAX_COUNT)
+        }
+    }
+
+    private fun savedInt(key: String, fallback: Int): Int =
+        runCatching { uiPrefs.getInt(key, fallback) }.getOrElse {
+            runCatching { uiPrefs.getString(key, null)?.toIntOrNull() ?: fallback }.getOrDefault(fallback)
+        }
+
+    private fun persistValidNumber(key: String, raw: String?, min: Int, max: Int) {
+        val value = raw?.trim()?.toIntOrNull() ?: return
+        if (value in min..max) uiPrefs.edit().putInt(key, value).apply()
+    }
+
+    private fun persistUiSettings() {
+        persistValidNumber(KEY_SOCIAL_COUNT, countInput.text?.toString(), MIN_COUNT, MAX_COUNT)
+        persistValidNumber(KEY_DELAY_SECONDS, delayInput.text?.toString(), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+        persistValidNumber(KEY_GROW_COUNT, growCountInput.text?.toString(), MIN_COUNT, MAX_COUNT)
+    }
+
+    private fun nextMessageSequence(): Int {
+        seq = if (seq >= Int.MAX_VALUE - 1) 1 else seq + 1
+        uiPrefs.edit().putInt(KEY_MESSAGE_SEQUENCE, seq).apply()
+        return seq
+    }
+
+    private fun readBounded(view: EditText, key: String, min: Int, max: Int, fallback: Int): Int {
+        val saved = savedInt(key, fallback).coerceIn(min, max)
+        val value = view.text?.toString()?.trim()?.toIntOrNull()?.coerceIn(min, max) ?: saved
+        if (view.text?.toString() != value.toString()) view.setText(value.toString())
+        uiPrefs.edit().putInt(key, value).apply()
+        return value
+    }
+
     private fun readSettings(countView: EditText) {
-        target = countView.text?.toString()?.trim()?.toIntOrNull()?.coerceIn(1, 500) ?: 20
-        val sec = delayInput.text?.toString()?.trim()?.toIntOrNull()?.coerceIn(2, 120) ?: 5
+        val countKey = if (countView === growCountInput) KEY_GROW_COUNT else KEY_SOCIAL_COUNT
+        target = readBounded(countView, countKey, MIN_COUNT, MAX_COUNT, DEFAULT_COUNT)
+        val sec = readBounded(
+            delayInput,
+            KEY_DELAY_SECONDS,
+            MIN_DELAY_SECONDS,
+            MAX_DELAY_SECONDS,
+            DEFAULT_DELAY_SECONDS
+        )
         delayMs = sec * 1000L
     }
 
     private fun beginRun(m: Phase, firstUrl: String, firstPhase: Phase, countView: EditText = countInput) {
+        if (accountApplyInProgress) {
+            toast("계정 전환이 끝난 뒤 시작하세요")
+            return
+        }
         if (!ensureLoggedInOrPrompt()) {
             // 로그인 안 됐어도 일단 페이지를 열어 로그인 유도(웹뷰 보임)
         }
         readSettings(countView)
+        invalidateScheduledWork()
         mode = m
         running = true
         processed = 0
         added = 0
-        seq = 0
         queue.clear()
         logLines.clear(); debugLog.text = ""
         showRunning(true)
@@ -284,6 +533,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadPage(url: String, p: Phase) {
         phase = p
         pageActed = false
+        lastBlogAddUrl = ""
         stepToken++
         dbg("이동: ${shortUrl(url)}")
         web.loadUrl(url)
@@ -294,10 +544,12 @@ class MainActivity : AppCompatActivity() {
         web.visibility = if (run) View.VISIBLE else View.GONE
         stopBar.visibility = if (run) View.VISIBLE else View.GONE
         debugLog.visibility = if (run) View.VISIBLE else View.GONE
+        setAccountControlsEnabled(!run && !accountApplyInProgress)
         if (run) status.visibility = View.VISIBLE
     }
 
     private fun stopAll() {
+        invalidateScheduledWork()
         running = false
         mode = Phase.NONE
         phase = Phase.NONE
@@ -308,6 +560,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun finishRun(msg: String) {
+        invalidateScheduledWork()
         running = false
         mode = Phase.NONE
         phase = Phase.NONE
@@ -319,6 +572,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onNeedLoginUi() {
+        invalidateScheduledWork()
         running = false
         progress.visibility = View.GONE
         setStatus("로그인이 필요합니다 — 웹뷰에서 로그인 후 같은 버튼을 다시 누르세요")
@@ -327,6 +581,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 첫 화면에서 바로 네이버 로그인 → 완료 시 현재 계정 세션 자동 저장('정지/홈'으로 복귀) */
     private fun openLogin() {
+        invalidateScheduledWork()
         running = false
         mode = Phase.NONE
         phase = Phase.NONE
@@ -343,51 +598,136 @@ class MainActivity : AppCompatActivity() {
     //  모드 1: 이웃새글 소셜 활동
     // ---------------------------------------------------------------
     private fun startSocial() {
+        if (!swLike.isChecked && !swComment.isChecked) {
+            toast("공감 또는 댓글 중 하나 이상을 켜세요")
+            return
+        }
+        seenPostKeys.clear()
+        socialScanRound = 0
+        socialNoNewScans = 0
+        feedScrollRounds = 8
+        socialActionPending = false
         setStatus("$currentAccount · 이웃새글 피드 여는 중…")
         beginRun(Phase.FEED_COLLECT, Accounts.FEED_URL, Phase.FEED_COLLECT, countInput)
     }
 
     private fun handleUrls(json: String) {
-        if (!running) return
-        val arr = parseArray(json)
-        if (arr.length() == 0) { finishRun("이웃새글을 찾지 못했어요 — 로그인/이웃 여부를 확인하세요"); return }
+        if (!running || mode != Phase.FEED_COLLECT || phase != Phase.FEED_COLLECT) return
+        val batch = parseBatch(json)
+        if (batch.token != null && batch.token != stepToken) {
+            dbg("지난 피드 수집 응답 무시")
+            return
+        }
+        stepToken++ // 수집 감시 무효화
+        val arr = batch.items
+        var fresh = 0
         for (i in 0 until arr.length()) {
             val u = arr.optString(i)
-            if (u.isNotBlank() && queue.size < target) queue.addLast(u)
+            if (u.isBlank()) continue
+            val key = canonicalPostKey(u)
+            if (seenPostKeys.add(key)) {
+                queue.addLast(u)
+                fresh++
+            }
         }
-        dbg("처리 대상 글 ${queue.size}개")
-        setStatus("글 ${queue.size}개 · 소셜활동 시작")
+        dbg("피드 ${arr.length()}개 확인 · 신규 ${fresh}개 · 누적 ${seenPostKeys.size}개")
+        if (fresh == 0) {
+            scheduleSocialRefill()
+            return
+        }
+        socialNoNewScans = 0
+        setStatus("신규 글 ${fresh}개 확보 · 소셜활동 ${processed}/$target")
         processNextPost()
     }
 
     private fun processNextPost() {
-        if (!running) return
-        if (processed >= target || queue.isEmpty()) {
-            finishRun("소셜활동 완료 — 글 ${processed}개 처리"); return
+        if (!running || mode != Phase.FEED_COLLECT) return
+        if (processed >= target) {
+            finishRun("소셜활동 완료 — 글 ${processed}개 처리")
+            return
+        }
+        if (queue.isEmpty()) {
+            requestMoreSocialPosts()
+            return
         }
         val url = queue.removeFirst()
+        socialActionPending = true
         setStatus("소셜활동 ${processed + 1}/$target — 글 여는 중…")
         loadPage(url, Phase.POST_ACT)
-        armWatchdog { dbg("응답 없음 → 다음 글"); processed++; processNextPost() }
+        armWatchdog(30_000) {
+            socialActionPending = false
+            dbg("글 응답 없음 → 완료 수에는 넣지 않고 다음 글")
+            postForRun(1_000) { processNextPost() }
+        }
     }
 
     private fun doLikeAndComment() {
-        if (!running) return
+        if (!running || mode != Phase.FEED_COLLECT || phase != Phase.POST_ACT) return
         val payload = JSONObject()
             .put("like", swLike.isChecked)
             .put("comment", swComment.isChecked)
-            .put("text", Comments.comment(commentBase.text?.toString().orEmpty(), seq++))
+            .put("text", Comments.comment(commentBase.text?.toString().orEmpty(), nextMessageSequence()))
+            .put("token", stepToken)
         runJs("window.__NF_likeAndComment($payload)")
     }
 
     private fun handleActed(json: String) {
-        if (!running) return
-        stepToken++  // 감시 무효화
+        if (!running || mode != Phase.FEED_COLLECT || phase != Phase.POST_ACT) return
         val r = runCatching { JSONObject(json) }.getOrDefault(JSONObject())
-        processed++
-        dbg("글 $processed: 공감=${r.optBoolean("liked")} 댓글=${r.optBoolean("commented")} (${r.optString("msg")})")
-        setStatus("소셜활동 $processed/$target 완료 · ${delayMs / 1000}초 후 다음")
-        web.postDelayed({ if (running) processNextPost() }, delayMs)
+        val token = r.optInt("token", -1)
+        if (token != stepToken) {
+            dbg("지난 글의 늦은 응답 무시")
+            return
+        }
+        stepToken++  // 감시 무효화
+        socialActionPending = false
+        if (r.optBoolean("needLogin") || r.optString("msg") == "login") {
+            onNeedLoginUi()
+            return
+        }
+        val liked = r.optBoolean("liked")
+        val commented = r.optBoolean("commented")
+        val completed = (swLike.isChecked && liked) || (swComment.isChecked && commented)
+        if (completed) processed++
+        dbg(
+            "글 처리: 공감=$liked 댓글=$commented (${r.optString("msg")})" +
+                if (completed) " · 완료 $processed/$target" else " · 성공 수 미반영"
+        )
+        setStatus("소셜활동 $processed/$target · ${delayMs / 1000}초 후 다음")
+        postForRun(delayMs) { processNextPost() }
+    }
+
+    private fun requestMoreSocialPosts() {
+        if (!running || mode != Phase.FEED_COLLECT) return
+        if (socialActionPending || queue.isNotEmpty()) return
+        if (processed >= target) {
+            finishRun("소셜활동 완료 — 글 ${processed}개 처리")
+            return
+        }
+        socialScanRound++
+        feedScrollRounds = (8 + socialScanRound * 8).coerceAtMost(MAX_FEED_SCROLL_ROUNDS)
+        setStatus(
+            "목표 ${processed}/$target · 이웃 글 범위를 더 넓혀 찾는 중 " +
+                "(${feedScrollRounds}단계)"
+        )
+        loadPage(Accounts.FEED_URL, Phase.FEED_COLLECT)
+    }
+
+    private fun scheduleSocialRefill() {
+        if (!running || mode != Phase.FEED_COLLECT || processed >= target) return
+        socialNoNewScans++
+        val waitMs = if (socialNoNewScans <= 2) 2_000L else max(delayMs, SOCIAL_IDLE_RETRY_MS)
+        setStatus(
+            "새 이웃 글 대기 중 · 목표 ${processed}/$target · ${waitMs / 1000}초 후 더 오래된 글 재탐색"
+        )
+        val expectedStep = stepToken
+        postForRun(waitMs) {
+            if (
+                stepToken == expectedStep &&
+                !socialActionPending &&
+                queue.isEmpty()
+            ) requestMoreSocialPosts()
+        }
     }
 
     // ---------------------------------------------------------------
@@ -400,6 +740,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 웹뷰에 보이는 현재 화면에서 수락 실행(자동 진입 URL에 신청목록이 없을 때 수동 대안) */
     private fun acceptHere() {
+        invalidateScheduledWork()
         mode = Phase.ACCEPT_RUN
         running = true
         showRunning(true)
@@ -411,12 +752,19 @@ class MainActivity : AppCompatActivity() {
             loadPage(Accounts.acceptUrl(currentAccount), Phase.ACCEPT_RUN)
         } else {
             setStatus("현재 화면에서 수락 실행…")
-            runJs("window.__NF_acceptAll()")
+            runJs("window.__NF_acceptAll($stepToken)")
         }
     }
 
     private fun handleAccept(json: String) {
+        if (!running || mode != Phase.ACCEPT_RUN) return
         val r = runCatching { JSONObject(json) }.getOrDefault(JSONObject())
+        val token = r.optInt("token", -1)
+        if (token != stepToken) {
+            dbg("지난 수락 응답 무시")
+            return
+        }
+        stepToken++
         val count = r.optInt("count")
         val why = r.optString("msg")
         if (why == "none") {
@@ -433,56 +781,187 @@ class MainActivity : AppCompatActivity() {
     //  모드 3: 주제로 새 이웃 찾기/추가
     // ---------------------------------------------------------------
     private fun startGrow() {
-        val topic = topicInput.text?.toString()?.trim()
-        if (topic.isNullOrBlank()) { toast("주제 키워드를 입력하세요"); return }
-        setStatus("'$topic' 블로그 검색 중…")
-        beginRun(Phase.SEARCH_COLLECT, Accounts.blogSearchUrl(topic), Phase.SEARCH_COLLECT, growCountInput)
+        manualTopics = topicInput.text?.toString().orEmpty()
+            .split(',', '\n')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        seenBloggerIds.clear()
+        growTopicDeck.clear()
+        growTopicDepth.clear()
+        growTopicObserved.clear()
+        lastGrowTopic = null
+        growSearchRound = 0
+        growNoNewSearches = 0
+        pendingBlogger = ""
+        pendingNeighborMessage = ""
+
+        currentGrowTopic = nextGrowTopic()
+        searchScrollRounds = 8
+        growTopicDepth[currentGrowTopic] = searchScrollRounds
+        val source = if (manualTopics.isEmpty()) "자동 주제" else "입력 주제"
+        setStatus("$source · '$currentGrowTopic' 블로그 검색 중…")
+        beginRun(
+            Phase.SEARCH_COLLECT,
+            Accounts.blogSearchUrl(currentGrowTopic),
+            Phase.SEARCH_COLLECT,
+            growCountInput
+        )
     }
 
     private fun handleBloggers(json: String) {
-        if (!running) return
-        val arr = parseArray(json)
-        if (arr.length() == 0) { finishRun("검색결과에서 블로거를 찾지 못했어요"); return }
-        for (i in 0 until arr.length()) {
-            val id = arr.optString(i)
-            if (id.isNotBlank()) queue.addLast(id)
+        if (!running || mode != Phase.SEARCH_COLLECT || phase != Phase.SEARCH_COLLECT) return
+        val batch = parseBatch(json)
+        if (batch.token != null && batch.token != stepToken) {
+            dbg("지난 검색 수집 응답 무시")
+            return
         }
-        dbg("후보 블로거 ${queue.size}명 (목표 ${target}명 신청)")
-        setStatus("블로거 ${queue.size}명 · 이웃 신청 시작")
+        stepToken++ // 검색 수집 감시 무효화
+        val arr = batch.items
+        growTopicObserved[currentGrowTopic] = max(
+            growTopicObserved[currentGrowTopic] ?: 0,
+            arr.length()
+        )
+        val fresh = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val id = arr.optString(i).trim().lowercase(Locale.ROOT)
+            if (!ACCOUNT_ID_PATTERN.matches(id) || id == currentAccount) continue
+            if (seenBloggerIds.add(id)) fresh.add(id)
+        }
+        fresh.shuffled().forEach(queue::addLast)
+        dbg("'$currentGrowTopic' ${arr.length()}명 확인 · 신규 ${fresh.size}명 · 누적 ${seenBloggerIds.size}명")
+        if (fresh.isEmpty()) {
+            scheduleGrowRefill()
+            return
+        }
+        growNoNewSearches = 0
+        setStatus("신규 후보 ${fresh.size}명 · 이웃 신청 $added/$target")
         processNextBlogger()
     }
 
     private fun processNextBlogger() {
-        if (!running) return
-        if (added >= target || queue.isEmpty()) {
-            finishRun("새 이웃 신청 완료 — ${added}명 신청"); return
+        if (!running || mode != Phase.SEARCH_COLLECT) return
+        if (added >= target) {
+            finishRun("새 이웃 신청 완료 — ${added}명 신청")
+            return
         }
-        val id = queue.removeFirst()
-        setStatus("이웃 신청 ${added}/$target — $id 방문 중…")
-        loadPage(Accounts.homeUrl(id), Phase.BLOG_ADD)
-        armWatchdog { dbg("응답 없음 → 다음 블로거"); processNextBlogger() }
+        if (queue.isEmpty()) {
+            requestMoreGrowCandidates()
+            return
+        }
+        pendingBlogger = queue.removeFirst()
+        neighborFormVisited = false
+        pendingNeighborMessage = Comments.neighborMessage(
+            neighborMsg.text?.toString().orEmpty(),
+            nextMessageSequence()
+        )
+        setStatus("이웃 신청 ${added}/$target — $pendingBlogger 방문 중…")
+        loadPage(Accounts.homeUrl(pendingBlogger), Phase.BLOG_ADD)
+        armWatchdog(60_000) {
+            dbg("$pendingBlogger 응답 없음 → 완료 수에는 넣지 않고 다음 후보")
+            pendingBlogger = ""
+            pendingNeighborMessage = ""
+            neighborFormVisited = false
+            postForRun(1_000) { processNextBlogger() }
+        }
     }
 
     private fun doAddNeighbor() {
-        if (!running) return
+        if (!running || mode != Phase.SEARCH_COLLECT || phase != Phase.BLOG_ADD) return
+        if (pendingBlogger.isBlank()) return
         val payload = JSONObject()
-            .put("message", Comments.neighborMessage(neighborMsg.text?.toString().orEmpty(), seq++))
+            .put("message", pendingNeighborMessage)
+            .put("token", stepToken)
+            .put("bloggerId", pendingBlogger)
+            .put("verifyResult", neighborFormVisited)
         runJs("window.__NF_addNeighbor($payload)")
     }
 
     private fun handleAdd(json: String) {
-        if (!running) return
-        stepToken++
+        if (!running || mode != Phase.SEARCH_COLLECT || phase != Phase.BLOG_ADD) return
         val r = runCatching { JSONObject(json) }.getOrDefault(JSONObject())
+        val token = r.optInt("token", -1)
+        if (token != stepToken) {
+            dbg("지난 후보의 늦은 응답 무시")
+            return
+        }
+        stepToken++
         when (r.optString("status")) {
             "added" -> { added++; dbg("신청 성공 ($added/$target)") }
             "already" -> dbg("이미 이웃 — 건너뜀")
             "noaddbtn" -> dbg("이웃추가 버튼 없음 — 건너뜀")
             "needlogin" -> { onNeedLoginUi(); return }
-            else -> dbg("신청 실패 — 건너뜀")
+            "blocked" -> {
+                finishRun("네이버 신청 한도 또는 접근 제한이 감지됐어요 — 잠시 후 다시 시도하세요")
+                return
+            }
+            "unverified" -> dbg("신청 여부를 확인하지 못함 — 성공 수에는 넣지 않음")
+            "failed" -> dbg("신청 버튼 처리 실패 — 다음 후보")
+            else -> dbg("신청 실패 — 다음 후보")
         }
+        pendingBlogger = ""
+        pendingNeighborMessage = ""
+        neighborFormVisited = false
         setStatus("이웃 신청 $added/$target · ${delayMs / 1000}초 후 다음")
-        web.postDelayed({ if (running) processNextBlogger() }, delayMs)
+        postForRun(delayMs) { processNextBlogger() }
+    }
+
+    private fun requestMoreGrowCandidates() {
+        if (!running || mode != Phase.SEARCH_COLLECT) return
+        if (pendingBlogger.isNotBlank() || queue.isNotEmpty()) return
+        if (added >= target) {
+            finishRun("새 이웃 신청 완료 — ${added}명 신청")
+            return
+        }
+        currentGrowTopic = nextGrowTopic()
+        val previousDepth = growTopicDepth[currentGrowTopic] ?: 2
+        searchScrollRounds = (previousDepth + 6).coerceAtMost(MAX_SEARCH_SCROLL_ROUNDS)
+        growTopicDepth[currentGrowTopic] = searchScrollRounds
+        growSearchRound++
+        setStatus(
+            "목표 $added/$target · '$currentGrowTopic'에서 새 후보 찾는 중 " +
+                "(${searchScrollRounds}단계)"
+        )
+        loadPage(Accounts.blogSearchUrl(currentGrowTopic), Phase.SEARCH_COLLECT)
+    }
+
+    private fun scheduleGrowRefill() {
+        if (!running || mode != Phase.SEARCH_COLLECT || added >= target) return
+        growNoNewSearches++
+        val waitMs = when {
+            growNoNewSearches <= 2 -> 1_500L
+            growNoNewSearches <= 6 -> max(delayMs, 5_000L)
+            else -> max(delayMs, 30_000L)
+        }
+        setStatus("'$currentGrowTopic' 신규 후보 없음 · ${waitMs / 1000}초 후 다른 주제 검색")
+        val expectedStep = stepToken
+        postForRun(waitMs) {
+            if (
+                stepToken == expectedStep &&
+                pendingBlogger.isBlank() &&
+                queue.isEmpty()
+            ) requestMoreGrowCandidates()
+        }
+    }
+
+    private fun nextGrowTopic(): String {
+        if (growTopicDeck.isEmpty()) {
+            val topics = if (manualTopics.isEmpty()) {
+                DiscoveryTopics.shuffledDeck(lastGrowTopic)
+            } else {
+                manualTopics.flatMap { topic ->
+                    listOf(topic, "$topic 정보", "$topic 후기", "$topic 일상", "$topic 기록")
+                }.distinct().shuffled().let { shuffled ->
+                    if (shuffled.size > 1 && shuffled.first() == lastGrowTopic) {
+                        shuffled.drop(1) + shuffled.first()
+                    } else shuffled
+                }
+            }
+            topics.forEach(growTopicDeck::addLast)
+        }
+        val topic = growTopicDeck.removeFirst()
+        lastGrowTopic = topic
+        return topic
     }
 
     // ---------------------------------------------------------------
@@ -502,16 +981,76 @@ class MainActivity : AppCompatActivity() {
     // ---------------------------------------------------------------
     //  유틸
     // ---------------------------------------------------------------
+    private fun invalidateScheduledWork() {
+        runToken++
+        stepToken++
+    }
+
+    private fun postForRun(delay: Long, action: () -> Unit) {
+        val expectedRun = runToken
+        web.postDelayed({
+            if (running && runToken == expectedRun) action()
+        }, delay)
+    }
+
+    private fun postForPage(delay: Long, pageGeneration: Int, action: () -> Unit) {
+        val expectedRun = runToken
+        web.postDelayed({
+            if (
+                running &&
+                runToken == expectedRun &&
+                webPageGeneration == pageGeneration
+            ) action()
+        }, delay)
+    }
+
     /** 일정 시간 응답이 없으면 다음으로 넘어가는 감시(토큰이 그대로일 때만 발동) */
-    private fun armWatchdog(onTimeout: () -> Unit) {
+    private fun armWatchdog(timeoutMs: Long = 22_000L, onTimeout: () -> Unit) {
+        val expectedRun = runToken
         val tk = stepToken
         web.postDelayed({
-            if (running && stepToken == tk) { stepToken++; onTimeout() }
-        }, 22000)
+            if (running && runToken == expectedRun && stepToken == tk) {
+                stepToken++
+                onTimeout()
+            }
+        }, timeoutMs)
+    }
+
+    private fun canonicalPostKey(url: String): String {
+        val key = runCatching {
+            val uri = Uri.parse(url)
+            val segments = uri.pathSegments.orEmpty()
+            val numericIndex = segments.indexOfLast { part ->
+                part.length >= 5 && part.all { it.isDigit() }
+            }
+            val logNo = uri.getQueryParameter("logNo")
+                ?.takeIf { it.isNotBlank() }
+                ?: numericIndex.takeIf { it >= 0 }?.let(segments::get)
+            val blogId = uri.getQueryParameter("blogId")
+                ?.takeIf { it.isNotBlank() }
+                ?: numericIndex.takeIf { it > 0 }?.let { segments[it - 1] }
+            if (logNo != null) {
+                "${blogId.orEmpty().lowercase(Locale.ROOT)}:$logNo"
+            } else {
+                null
+            }
+        }.getOrNull()
+        return key ?: url.substringBefore('#').trim().lowercase(Locale.ROOT)
     }
 
     private fun parseArray(json: String): JSONArray =
         runCatching { JSONArray(json) }.getOrDefault(JSONArray())
+
+    private fun parseBatch(json: String): JsBatch {
+        val obj = runCatching { JSONObject(json) }.getOrNull()
+        if (obj != null && obj.has("items")) {
+            return JsBatch(
+                token = obj.optInt("token").takeIf { obj.has("token") },
+                items = obj.optJSONArray("items") ?: JSONArray()
+            )
+        }
+        return JsBatch(token = null, items = parseArray(json))
+    }
 
     private fun setStatus(msg: String) {
         status.text = msg
@@ -544,12 +1083,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        if (Accounts.isLoggedIn()) Accounts.saveCurrentFor(this, currentAccount)
+        persistUiSettings()
+        if (!accountApplyInProgress && Accounts.isLoggedIn()) {
+            appliedAccount?.let { Accounts.saveCurrentFor(this, it) }
+        }
         CookieManager.getInstance().flush()
     }
 
     override fun onDestroy() {
+        invalidateScheduledWork()
+        running = false
         web.removeJavascriptInterface("NF")
+        web.stopLoading()
         web.destroy()
         super.onDestroy()
     }
