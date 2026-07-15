@@ -33,6 +33,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.2'
+          # 러너에 저장된 Gradle 캐시가 손상되어(bcprov jar 생성 실패) 빌드가
+          # 구성 단계에서 반복 실패 → 캐시를 끄고 항상 깨끗하게 받는다.
+          cache-disabled: true
 
       - name: Build debug APK
         working-directory: android
