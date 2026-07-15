@@ -81,12 +81,15 @@ object AutomationJs {
   function clickMore(){
     var els=edoc().querySelectorAll('button,a,[role=button]');
     for (var i=0;i<els.length;i++){
-      if (!visible(els[i]) || els[i].disabled) continue;
-      var t=norm(txt(els[i]));
-      var a=norm(attr(els[i],'aria-label')+' '+attr(els[i],'title'));
+      // 값싼 텍스트/aria 매칭을 먼저 해서, 레이아웃을 강제하는 visible()은
+      // '더보기' 후보에만 호출한다(스크롤 페이지 수백 개 앵커의 리플로우 절감).
+      var el=els[i];
+      var t=norm(txt(el));
+      var a=norm(attr(el,'aria-label')+' '+attr(el,'title'));
       if (t==='더보기' || t==='글더보기' || t==='검색결과더보기' ||
           t==='이웃새글더보기' || a==='더보기' || a.indexOf('검색결과더보기')>=0){
-        try{ els[i].click(); log('더보기 클릭'); return true; }catch(e){}
+        if (!visible(el) || el.disabled) continue;
+        try{ el.click(); log('더보기 클릭'); return true; }catch(e){}
       }
     }
     return false;
@@ -179,7 +182,10 @@ object AutomationJs {
     function harvest(){
       var as=edoc().querySelectorAll('a[href]');
       for (var i=0;i<as.length;i++){
-        var p=canonicalPost(as[i].href);
+        var a=as[i];
+        if (a.__nfSeen) continue;   // 이미 검사한 앵커는 URL 재파싱 생략(스크롤 페이지 누적)
+        a.__nfSeen=1;
+        var p=canonicalPost(a.href);
         if (p && !seen[p.key]){ seen[p.key]=1; urls.push(p.url); }
       }
     }
@@ -374,7 +380,10 @@ object AutomationJs {
     function harvest(){
       var as=edoc().querySelectorAll('a[href]');
       for (var i=0;i<as.length;i++){
-        var id = extractBlogId(as[i].href);
+        var a=as[i];
+        if (a.__nfSeen) continue;   // 이미 검사한 앵커는 재파싱 생략(스크롤 페이지 누적)
+        a.__nfSeen=1;
+        var id = extractBlogId(a.href);
         if (!id) continue;
         id=id.toLowerCase();
         if (id===mine) continue;
@@ -403,7 +412,10 @@ object AutomationJs {
     function harvest(){
       var as=edoc().querySelectorAll('a[href]');
       for (var i=0;i<as.length;i++){
-        var id = extractBlogId(as[i].href);
+        var a=as[i];
+        if (a.__nfSeen) continue;   // 이미 검사한 앵커는 재파싱 생략(스크롤 페이지 누적)
+        a.__nfSeen=1;
+        var id = extractBlogId(a.href);
         if (!id) continue;
         id=id.toLowerCase();
         if (id===mine) continue;

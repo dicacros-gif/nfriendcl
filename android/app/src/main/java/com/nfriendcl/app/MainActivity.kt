@@ -54,7 +54,11 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_DELAY_SECONDS = 2
         private const val MAX_DELAY_SECONDS = 120
         private const val MAX_FEED_SCROLL_ROUNDS = 120
+        private const val INITIAL_SEARCH_ROUNDS = 8
         private const val MAX_SEARCH_SCROLL_ROUNDS = 60
+        // 얕은 깊이에서 이만큼 연속으로 새 후보가 안 나오면 주제 소진으로 보고 다음 주제로.
+        // (최대 깊이에서는 1회만 비어도 바로 다음 주제로 넘어간다.)
+        private const val TOPIC_DRY_LIMIT_SHALLOW = 3
         private const val SOCIAL_IDLE_RETRY_MS = 15_000L
         // 이웃새글 피드가 이만큼 연속으로 새 글을 못 주면 친구 블로그의 지난 글로 보충한다.
         private const val FEED_DRY_LIMIT = 2
@@ -140,9 +144,10 @@ class MainActivity : AppCompatActivity() {
     private var manualTopics = emptyList<String>()
     private var lastGrowTopic: String? = null
     private var currentGrowTopic = ""
-    private var growSearchRound = 0
     private var growNoNewSearches = 0
-    private var searchScrollRounds = 8
+    // 현재 주제에서 연속으로 새 후보가 안 나온 스캔 수(주제 소진 판정용)
+    private var growTopicDryStreak = 0
+    private var searchScrollRounds = INITIAL_SEARCH_ROUNDS
     private var pendingBlogger = ""
     private var pendingNeighborMessage = ""
     private var neighborFormVisited = false
@@ -1052,13 +1057,13 @@ class MainActivity : AppCompatActivity() {
         growTopicDepth.clear()
         growTopicObserved.clear()
         lastGrowTopic = null
-        growSearchRound = 0
         growNoNewSearches = 0
+        growTopicDryStreak = 0
         pendingBlogger = ""
         pendingNeighborMessage = ""
 
         currentGrowTopic = nextGrowTopic()
-        searchScrollRounds = 8
+        searchScrollRounds = INITIAL_SEARCH_ROUNDS
         growTopicDepth[currentGrowTopic] = searchScrollRounds
         val source = if (manualTopics.isEmpty()) "자동 주제" else "입력 주제"
         setStatus("$source · '$currentGrowTopic' 블로그 검색 중…")
@@ -1097,6 +1102,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         growNoNewSearches = 0
+        growTopicDryStreak = 0
         setStatus("신규 후보 ${fresh.size}명 · 이웃 신청 $added/$target")
         processNextBlogger()
     }
@@ -1169,6 +1175,11 @@ class MainActivity : AppCompatActivity() {
         postForRun(wait) { processNextBlogger() }
     }
 
+    /**
+     * 후보가 떨어지면: 현재 주제를 더 깊이(+8단계) 다시 검색해 최대한 많이 신청하고,
+     * 같은 주제에서 연속으로 새 후보가 안 나오면(얕은 깊이 3회, 최대 깊이 1회)
+     * 다음 랜덤 주제로 넘어간다.
+     */
     private fun requestMoreGrowCandidates() {
         if (!running || mode != Phase.SEARCH_COLLECT) return
         if (pendingBlogger.isNotBlank() || queue.isNotEmpty()) return
@@ -1176,13 +1187,23 @@ class MainActivity : AppCompatActivity() {
             finishRun("새 이웃 신청 완료 — ${added}명 신청")
             return
         }
-        currentGrowTopic = nextGrowTopic()
-        val previousDepth = growTopicDepth[currentGrowTopic] ?: 2
-        searchScrollRounds = (previousDepth + 6).coerceAtMost(MAX_SEARCH_SCROLL_ROUNDS)
+        val atMaxDepth = searchScrollRounds >= MAX_SEARCH_SCROLL_ROUNDS
+        val exhausted = currentGrowTopic.isBlank() ||
+            growTopicDryStreak >= (if (atMaxDepth) 1 else TOPIC_DRY_LIMIT_SHALLOW)
+        if (exhausted) {
+            val previous = currentGrowTopic
+            currentGrowTopic = nextGrowTopic()
+            // 예전에 판 주제가 다시 오면 이전 깊이에서 이어서(얕은 중복 스캔 방지)
+            searchScrollRounds = (growTopicDepth[currentGrowTopic] ?: INITIAL_SEARCH_ROUNDS)
+                .coerceAtMost(MAX_SEARCH_SCROLL_ROUNDS)
+            growTopicDryStreak = 0
+            if (previous.isNotBlank()) dbg("'$previous' 소진 → 다음 주제 '$currentGrowTopic'")
+        } else {
+            searchScrollRounds = (searchScrollRounds + 8).coerceAtMost(MAX_SEARCH_SCROLL_ROUNDS)
+        }
         growTopicDepth[currentGrowTopic] = searchScrollRounds
-        growSearchRound++
         setStatus(
-            "목표 $added/$target · '$currentGrowTopic'에서 새 후보 찾는 중 " +
+            "목표 $added/$target · '$currentGrowTopic' 더 깊이 찾는 중 " +
                 "(${searchScrollRounds}단계)"
         )
         loadPage(Accounts.blogSearchUrl(currentGrowTopic), Phase.SEARCH_COLLECT)
@@ -1192,14 +1213,17 @@ class MainActivity : AppCompatActivity() {
     private fun scheduleGrowRefill() {
         if (!running || mode != Phase.SEARCH_COLLECT || added >= target) return
         growNoNewSearches++
+        growTopicDryStreak++   // 이번 스캔에서 새 후보 없음 → 주제 소진 판정에 반영
         val waitMs = when {
             growNoNewSearches <= 2 -> 1_500L
             growNoNewSearches <= 6 -> max(delayMs, 5_000L)
             else -> max(delayMs, 30_000L)
         }
+        val atMaxDepth = searchScrollRounds >= MAX_SEARCH_SCROLL_ROUNDS
+        val willRotate = growTopicDryStreak >= (if (atMaxDepth) 1 else TOPIC_DRY_LIMIT_SHALLOW)
+        val next = if (willRotate) "다음 주제로" else "더 깊이"
         setStatus(
-            "'$currentGrowTopic' 검색에서 새 블로거 없음 · ${waitMs / 1000}초 후 " +
-                "다음 랜덤 주제로 자동 재시도 ($added/$target)"
+            "'$currentGrowTopic' 새 블로거 없음 · ${waitMs / 1000}초 후 $next 재검색 ($added/$target)"
         )
         val expectedStep = stepToken
         postForRun(waitMs) {
