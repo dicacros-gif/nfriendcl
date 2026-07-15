@@ -553,18 +553,27 @@ object AutomationJs {
   }
 
   function messageField(d){
-    return d.querySelector('textarea[placeholder*="메시지"], textarea[placeholder*="멘트"], textarea[placeholder*="신청"], .buddy_message textarea, textarea[maxlength], textarea');
+    return d.querySelector('textarea[placeholder*="메시지"], textarea[placeholder*="멘트"], textarea[placeholder*="신청"], .buddy_message textarea, textarea[maxlength], textarea, [contenteditable="true"][class*="message"], [contenteditable="true"]');
   }
 
+  // 입력창의 maxlength 에 맞춰 자르고, 이벤트를 충분히 쏴서 값이 실제로 반영됐는지 확인
   function fillMessage(d, msg){
     if (!msg) return true;
     var ta=messageField(d);
-    if (ta){
-      log('메시지 입력창 발견 -> 텍스트 입력');
-      ta.focus(); ta.value = msg; fire(ta, 'input'); fire(ta, 'change');
-      return (ta.value||'')===msg;
+    if (!ta) return false;
+    var limit=0;
+    try{ limit=parseInt(attr(ta,'maxlength'),10)||0; }catch(e){}
+    var text=msg;
+    if (limit>0 && text.length>limit) text=text.slice(0,limit);
+    log('메시지 입력창 발견 -> 텍스트 입력');
+    try{ ta.focus(); }catch(e){}
+    var tag=(ta.tagName||'').toLowerCase();
+    if (tag==='textarea' || tag==='input'){
+      ta.value=text; fire(ta,'input'); fire(ta,'keyup'); fire(ta,'change');
+      return (ta.value||'').length>0;
     }
-    return false;
+    ta.textContent=text; fire(ta,'input'); fire(ta,'keyup');
+    return (ta.textContent||'').length>0;
   }
 
   function dialogConfirm(d){
@@ -669,16 +678,23 @@ object AutomationJs {
     function submitFinal(){
       var state=neighborOutcome(edoc());
       if (state){ report(state); return; }
-      if (msg && !fillMessage(edoc(),msg)){
-        log('신청 메시지 입력 실패'); report('failed'); return;
-      }
-      setTimeout(function(){
+      // 입력창이 늦게 그려지는 경우가 있어 몇 번 재시도하고,
+      // 끝내 실패해도 신청 자체는 계속 진행한다(메시지 없이도 신청은 유효).
+      var attempts=0;
+      function tryFill(){
         if (reported) return;
-        log('최종 신청 클릭 시도');
-        rememberVerification();
-        if (!clickConfirm(edoc())){ report('failed'); return; }
-        observeFinal();
-      },700);
+        var ok = !msg || fillMessage(edoc(), msg);
+        if (!ok && attempts<4){ attempts++; setTimeout(tryFill, 600); return; }
+        if (!ok) log('메시지 입력 실패 - 메시지 없이 계속 진행');
+        setTimeout(function(){
+          if (reported) return;
+          log('최종 신청 클릭 시도');
+          rememberVerification();
+          if (!clickConfirm(edoc())){ report('failed'); return; }
+          observeFinal();
+        },700);
+      }
+      tryFill();
     }
     
     var d = edoc();

@@ -9,6 +9,7 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.JsResult
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -331,6 +332,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         web.webViewClient = object : WebViewClient() {
+            // 자동화 중에는 블로그/검색/로그인 외 다른 네이버 메뉴(카페·뉴스 등)로
+            // 빠지지 않게 메인 프레임 이동을 허용 목록으로 제한한다.
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                if (!running) return false
+                val req = request ?: return false
+                if (!req.isForMainFrame) return false
+                if (isAutomationHostAllowed(req.url)) return false
+                dbg("이동 차단: ${req.url.host ?: ""} (자동화 외 메뉴)")
+                return true
+            }
+
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 webPageGeneration++
                 if (running && phase == Phase.BLOG_ADD) lastBlogAddUrl = ""
@@ -488,6 +500,16 @@ class MainActivity : AppCompatActivity() {
                 result?.confirm(); return true
             }
         }
+    }
+
+    /** 자동화 중 이동을 허용하는 호스트: 블로그 계열 · 블로그 검색 · 네이버 로그인만. */
+    private fun isAutomationHostAllowed(uri: Uri?): Boolean {
+        val host = uri?.host?.lowercase(Locale.ROOT) ?: return false
+        return host == "blog.naver.com" ||
+            host.endsWith(".blog.naver.com") ||
+            host == "m.search.naver.com" ||
+            host == "search.naver.com" ||
+            host == "nid.naver.com"
     }
 
     private fun runJs(call: String) {
@@ -1195,7 +1217,10 @@ class MainActivity : AppCompatActivity() {
                 DiscoveryTopics.shuffledDeck(lastGrowTopic)
             } else {
                 manualTopics.flatMap { topic ->
-                    listOf(topic, "$topic 정보", "$topic 후기", "$topic 일상", "$topic 기록")
+                    // 원문은 그대로 두고, 5자 이내가 되는 변주만 덧붙인다.
+                    listOf(topic) + listOf("후기", "일상", "기록", "일기")
+                        .map { topic + it }
+                        .filter { it.length <= 5 }
                 }.distinct().shuffled().let { shuffled ->
                     if (shuffled.size > 1 && shuffled.first() == lastGrowTopic) {
                         shuffled.drop(1) + shuffled.first()
