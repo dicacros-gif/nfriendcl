@@ -19,7 +19,8 @@ object Comments {
 
     private const val RECENT_CAPACITY = 320
     private const val UNIQUE_ATTEMPTS = 160
-    private const val EMOJI_PERCENT = 28
+    private const val EMOJI_PERCENT = 26
+    private const val EMOTICON_PERCENT = 22
     private const val COMMENT_SALT = -7046029254386353131L
     private const val NEIGHBOR_SALT = -4417276706812531889L
 
@@ -30,6 +31,11 @@ object Comments {
     private val emojis = listOf(
         "😊", "👍", "🙏", "✨", "🌿", "😄", "🍀", "🌸",
         "💚", "☕", "🌷", "🙂", "👏", "🌻", "😃", "🍃"
+    )
+
+    // 네이버 이용자들이 실제로 자주 쓰는 텍스트 이모티콘(문구를 더 사람처럼·다양하게)
+    private val emoticons = listOf(
+        "^^", "^^*", "ㅎㅎ", "^-^", ":)", "~", "ㅎㅎ~", "^^;", "!!"
     )
 
     private val commentOpeners = listOf(
@@ -361,8 +367,19 @@ object Comments {
         return if (last != null && last in ".!?。！？…~") text else "$text."
     }
 
-    private fun optionalEmoji(random: Random): String =
-        if (random.nextInt(100) < EMOJI_PERCENT) " ${pick(random, emojis)}" else ""
+    /** 문구 끝에 이모지 또는 텍스트 이모티콘을 가끔 붙여 매 문구를 조금씩 다르게 만든다. */
+    private fun optionalEmoji(random: Random): String {
+        val roll = random.nextInt(100)
+        return when {
+            roll < EMOJI_PERCENT -> " ${pick(random, emojis)}"
+            roll < EMOJI_PERCENT + EMOTICON_PERCENT -> {
+                val e = pick(random, emoticons)
+                // 물결/느낌표류는 붙여 쓰고, 나머지는 한 칸 띄운다.
+                if (e.startsWith("~") || e.startsWith("!")) e else " $e"
+            }
+            else -> ""
+        }
+    }
 
     private fun <T> pick(random: Random, values: List<T>): T =
         values[random.nextInt(values.size)]

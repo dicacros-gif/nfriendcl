@@ -2,9 +2,12 @@ package com.nfriendcl.app
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.JsResult
@@ -47,6 +50,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_DELAY_SECONDS = "action_delay_seconds"
         private const val KEY_GROW_COUNT = "grow_target_count"
         private const val KEY_MESSAGE_SEQUENCE = "message_sequence"
+        private const val KEY_USED_TOPICS = "used_grow_topics"
         private const val DEFAULT_COUNT = 20
         private const val DEFAULT_DELAY_SECONDS = 5
         private const val MIN_COUNT = 1
@@ -142,6 +146,8 @@ class MainActivity : AppCompatActivity() {
     private val growTopicDepth = mutableMapOf<String, Int>()
     private val growTopicObserved = mutableMapOf<String, Int>()
     private var manualTopics = emptyList<String>()
+    // 이전 실행에서 이미 사용한 자동 주제(다시 나오지 않게 영구 저장)
+    private val usedGrowTopics = LinkedHashSet<String>()
     private var lastGrowTopic: String? = null
     private var currentGrowTopic = ""
     private var growNoNewSearches = 0
@@ -209,7 +215,17 @@ class MainActivity : AppCompatActivity() {
         btnStop.setOnClickListener { stopAll() }
         btnAcceptHere.setOnClickListener { acceptHere() }
 
+        requestNotificationPermissionIfNeeded()
         showRunning(false)
+    }
+
+    /** Android 13+ 에서 백그라운드 실행 알림을 띄우기 위한 권한 요청(거부돼도 서비스는 동작). */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val perm = android.Manifest.permission.POST_NOTIFICATIONS
+        if (checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED) {
+            runCatching { requestPermissions(arrayOf(perm), 100) }
+        }
     }
 
     // ---------------------------------------------------------------
@@ -517,6 +533,17 @@ class MainActivity : AppCompatActivity() {
             host == "nid.naver.com"
     }
 
+    private fun keepScreenOn(on: Boolean) {
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    /** 자동화 활성화 시: 화면 항상 켬(디밍 방지) + 포그라운드 서비스로 백그라운드 지속. */
+    private fun setAutomationActive(active: Boolean) {
+        keepScreenOn(active)
+        if (active) KeepAliveService.start(this) else KeepAliveService.stop(this)
+    }
+
     private fun runJs(call: String) {
         if (!running) return
         val expectedRun = runToken
@@ -655,6 +682,7 @@ class MainActivity : AppCompatActivity() {
         added = 0
         queue.clear()
         logLines.clear(); debugLog.text = ""
+        setAutomationActive(true)
         showRunning(true)
         btnAcceptHere.visibility = if (m == Phase.ACCEPT_RUN) View.VISIBLE else View.GONE
         progress.visibility = View.VISIBLE
@@ -709,6 +737,7 @@ class MainActivity : AppCompatActivity() {
         phase = Phase.NONE
         queue.clear()
         progress.visibility = View.GONE
+        setAutomationActive(false)
         showRunning(false)
         setStatus("정지됨")
     }
@@ -720,6 +749,7 @@ class MainActivity : AppCompatActivity() {
         phase = Phase.NONE
         queue.clear()
         progress.visibility = View.GONE
+        setAutomationActive(false)
         showRunning(false)
         setStatus(msg)
         toast(msg)
@@ -728,6 +758,8 @@ class MainActivity : AppCompatActivity() {
     private fun onNeedLoginUi() {
         invalidateScheduledWork()
         running = false
+        KeepAliveService.stop(this)
+        keepScreenOn(true) // 로그인 화면은 꺼지지 않게 유지
         progress.visibility = View.GONE
         setStatus("로그인이 필요합니다 — 웹뷰에서 로그인 후 같은 버튼을 다시 누르세요")
         dbg("로그인 대기")
@@ -740,6 +772,7 @@ class MainActivity : AppCompatActivity() {
         mode = Phase.NONE
         phase = Phase.NONE
         queue.clear()
+        keepScreenOn(true)
         showRunning(true)
         btnAcceptHere.visibility = View.GONE
         progress.visibility = View.VISIBLE
@@ -1056,6 +1089,8 @@ class MainActivity : AppCompatActivity() {
         growTopicDeck.clear()
         growTopicDepth.clear()
         growTopicObserved.clear()
+        usedGrowTopics.clear()
+        usedGrowTopics.addAll(loadUsedTopics())
         lastGrowTopic = null
         growNoNewSearches = 0
         growTopicDryStreak = 0
@@ -1236,26 +1271,47 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun nextGrowTopic(): String {
-        if (growTopicDeck.isEmpty()) {
-            val topics = if (manualTopics.isEmpty()) {
-                DiscoveryTopics.shuffledDeck(lastGrowTopic)
-            } else {
-                manualTopics.flatMap { topic ->
-                    // 원문은 그대로 두고, 5자 이내가 되는 변주만 덧붙인다.
-                    listOf(topic) + listOf("후기", "일상", "기록", "일기")
-                        .map { topic + it }
-                        .filter { it.length <= 5 }
-                }.distinct().shuffled().let { shuffled ->
-                    if (shuffled.size > 1 && shuffled.first() == lastGrowTopic) {
-                        shuffled.drop(1) + shuffled.first()
-                    } else shuffled
-                }
-            }
-            topics.forEach(growTopicDeck::addLast)
-        }
+        if (growTopicDeck.isEmpty()) refillTopicDeck()
         val topic = growTopicDeck.removeFirst()
         lastGrowTopic = topic
+        // 자동(랜덤) 주제만 사용 기록에 남겨 다음 실행부터 다시 나오지 않게 한다.
+        if (manualTopics.isEmpty() && usedGrowTopics.add(topic)) persistUsedTopics()
         return topic
+    }
+
+    private fun refillTopicDeck() {
+        if (manualTopics.isNotEmpty()) {
+            manualTopics.flatMap { topic ->
+                // 원문은 그대로 두고, 5자 이내가 되는 변주만 덧붙인다.
+                listOf(topic) + listOf("후기", "일상", "기록", "일기")
+                    .map { topic + it }
+                    .filter { it.length <= 5 }
+            }.distinct().shuffled().let { shuffled ->
+                if (shuffled.size > 1 && shuffled.first() == lastGrowTopic) {
+                    shuffled.drop(1) + shuffled.first()
+                } else shuffled
+            }.forEach(growTopicDeck::addLast)
+            return
+        }
+        // 자동 주제: 이미 쓴 주제는 제외. 전부 소진되면 기록을 비우고 처음부터 다시 순환.
+        var topics = DiscoveryTopics.shuffledDeck(lastGrowTopic)
+            .filter { it !in usedGrowTopics }
+        if (topics.isEmpty()) {
+            dbg("자동 주제를 모두 한 번씩 사용 → 기록 초기화 후 재순환")
+            usedGrowTopics.clear()
+            persistUsedTopics()
+            topics = DiscoveryTopics.shuffledDeck(lastGrowTopic)
+        }
+        topics.forEach(growTopicDeck::addLast)
+    }
+
+    private fun loadUsedTopics(): Set<String> =
+        runCatching { uiPrefs.getStringSet(KEY_USED_TOPICS, emptySet()) ?: emptySet() }
+            .getOrDefault(emptySet())
+
+    private fun persistUsedTopics() {
+        // SharedPreferences 는 저장한 Set 인스턴스를 그대로 참조하므로 방어적 복사본을 넣는다.
+        uiPrefs.edit().putStringSet(KEY_USED_TOPICS, HashSet(usedGrowTopics)).apply()
     }
 
     // ---------------------------------------------------------------
@@ -1388,6 +1444,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         invalidateScheduledWork()
         running = false
+        KeepAliveService.stop(this)
         web.removeJavascriptInterface("NF")
         web.stopLoading()
         web.destroy()
